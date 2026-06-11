@@ -1,0 +1,26 @@
+import Modal from './Modal'
+
+export default function ConfirmModal({ isOpen, title, message, onClose, onConfirm, loading }) {
+    return (
+        <Modal isOpen={isOpen} title={title} onClose={onClose} width="max-w-lg">
+            <div className="space-y-5">
+                <p className="text-sm text-slate-600 dark:text-slate-300">{message}</p>
+                <div className="flex justify-end gap-3">
+                    <button
+                        onClick={onClose}
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium dark:border-slate-700"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        disabled={loading}
+                        className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                    >
+                        {loading ? 'Deleting...' : 'Delete'}
+                    </button>
+                </div>
+            </div>
+        </Modal>
+    )
+}
