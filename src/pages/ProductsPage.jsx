@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client'
+import { useServerTable } from '../hooks/useServerTable'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusBadge from '../components/StatusBadge'
@@ -20,7 +22,7 @@ import LotAdjustModal from '../components/LotAdjustModal'
 import { useToast } from '../context/ToastContext'
 import { safeArray, parseBool, toNumber } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
-import { Eye, Pencil, Trash2, PackagePlus } from 'lucide-react'
+import { Eye, Pencil, Trash2, PackagePlus, Package } from 'lucide-react'
 import ImageUploadField, { resolveImageUrl } from '../components/ImageUploadField.jsx'
 import { stockStatusOf } from '../utils/stock'
 
@@ -71,10 +73,6 @@ const emptyForm = {
     active: true,
 }
 
-// Filters + pagination live in the URL query string so navigating to a product detail page
-// and pressing Back restores the exact same view. Arrays are stored comma-joined.
-const parseCsv = (value) => (value ? value.split(',').filter(Boolean) : [])
-
 export default function ProductsPage() {
     const { t } = useTranslation()
     const { canCreate, canEdit, canDelete } = usePermissions('PRODUCTS')
@@ -96,7 +94,6 @@ export default function ProductsPage() {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
 
-    const [rows, setRows] = useState([])
     const [manufacturers, setManufacturers] = useState([])
     const [categories, setCategories] = useState([])
     const [taxRates, setTaxRates] = useState([])
@@ -106,36 +103,48 @@ export default function ProductsPage() {
     const [selectedIds, setSelectedIds] = useState([])
     const [loading, setLoading] = useState(false)
 
-    // Derive filter + pagination state from the URL (source of truth).
-    const search = searchParams.get('q') || ''
-    const manufacturerFilter = parseCsv(searchParams.get('manufacturer'))
-    const categoryFilter = parseCsv(searchParams.get('category'))
-    const statusFilter = parseCsv(searchParams.get('status'))
-    const page = Math.max(1, Number(searchParams.get('page')) || 1)
-    const pageSize = Number(searchParams.get('size')) || 10
-
-    // Writes a single query param (array values are comma-joined), dropping empties to keep the
-    // URL tidy. Changing a filter resets pagination to page 1.
-    const updateParam = (key, value, { resetPage = true } = {}) => {
-        setSearchParams((prev) => {
-            const next = new URLSearchParams(prev)
-            const serialized = Array.isArray(value) ? value.join(',') : value
-            if (serialized) next.set(key, String(serialized))
-            else next.delete(key)
-            if (resetPage) next.delete('page')
-            return next
-        }, { replace: true })
+    // Builds the /products query for the current page + filters. The status filter mixes activity
+    // (active/inactive) and stock level (ok/low/out), which map to the backend's `active` and
+    // `stockStatus` params respectively.
+    const buildProductQuery = ({ page, size, sortBy, sortDir, q, filters }) => {
+        const params = new URLSearchParams()
+        params.set('page', page - 1) // the backend's pages are 0-based
+        params.set('size', size)
+        params.set('sortBy', sortBy)
+        params.set('sortDir', sortDir)
+        if (q) params.set('search', q)
+        if (filters.manufacturer?.length) params.set('manufacturerId', filters.manufacturer.join(','))
+        if (filters.category?.length) params.set('categoryId', filters.category.join(','))
+        const status = filters.status || []
+        const activeSel = status.filter((v) => v === 'active' || v === 'inactive')
+        if (activeSel.length === 1) params.set('active', activeSel[0] === 'active' ? 'true' : 'false')
+        const stockSel = status.filter((v) => v === 'ok' || v === 'low' || v === 'out')
+        if (stockSel.length) params.set('stockStatus', stockSel.join(','))
+        return params
     }
 
-    const setSearch = (value) => updateParam('q', value)
-    const setManufacturerFilter = (value) => updateParam('manufacturer', value)
-    const setCategoryFilter = (value) => updateParam('category', value)
-    const setStatusFilter = (value) => updateParam('status', value)
-    const setPage = (value) => updateParam('page', value > 1 ? value : '', { resetPage: false })
-    const setPageSize = (value) => updateParam('size', value)
+    // Server-driven table: page/size/sort/search/filters live in the URL; `rows` is just the current page.
+    const {
+        rows, total, loading: listLoading, page, pageSize, q: search, filters,
+        setSearch, setFilter, setPage, setPageSize, reload,
+    } = useServerTable({
+        filterKeys: ['manufacturer', 'category', 'status'],
+        fetcher: (params) => apiGet(`/products?${buildProductQuery(params).toString()}`),
+    })
+
+    const manufacturerFilter = filters.manufacturer
+    const categoryFilter = filters.category
+    const statusFilter = filters.status
+    const filtersActive = !!search || manufacturerFilter.length > 0 || categoryFilter.length > 0 || statusFilter.length > 0
+
+    // Export must include every matching row, not only the current page.
+    const fetchAllProducts = async () => {
+        const params = buildProductQuery({ page: 1, size: 10000, sortBy: 'id', sortDir: 'desc', q: search, filters })
+        return safeArray(await apiGet(`/products?${params.toString()}`))
+    }
 
     useEffect(() => {
-        loadData()
+        loadReferences()
     }, [])
 
     // Deep-link support: ?edit=<id> opens the edit modal once rows are loaded (used by the
@@ -146,44 +155,27 @@ export default function ProductsPage() {
         const item = rows.find((r) => String(r.id) === String(editId))
         if (item) {
             openEdit(item)
-            updateParam('edit', '', { resetPage: false })
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev)
+                next.delete('edit')
+                return next
+            }, { replace: true })
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [editId, rows])
 
-    const loadData = async () => {
-        const [productsRes, manufacturersRes, categoriesRes, taxRatesRes] = await Promise.all([
-            apiGet('/products?page=0&size=500&sortBy=id&sortDir=desc'),
+    // Reference lists for the filter dropdowns, forms, and CSV import name-resolution. These are
+    // intentionally fetched in full (not paginated) — the product list itself is paged server-side.
+    const loadReferences = async () => {
+        const [manufacturersRes, categoriesRes, taxRatesRes] = await Promise.all([
             apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/categories?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/settings/tax-rates'),
         ])
-        setRows(safeArray(productsRes))
         setManufacturers(safeArray(manufacturersRes))
         setCategories(safeArray(categoriesRes))
         setTaxRates(safeArray(taxRatesRes))
     }
-
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const matchesSearch =
-                !search ||
-                row.name?.toLowerCase().includes(search.toLowerCase()) ||
-                row.sku?.toLowerCase().includes(search.toLowerCase()) ||
-                row.manufacturer?.name?.toLowerCase().includes(search.toLowerCase())
-
-            const matchesManufacturer = manufacturerFilter.length === 0 || manufacturerFilter.includes(String(row.manufacturer?.id))
-            const matchesCategory = categoryFilter.length === 0 || categoryFilter.includes(String(row.category?.id))
-            // The status filter mixes activity (active/inactive) and stock level (ok/low/out).
-            // Match each dimension independently: AND across dimensions, OR within a dimension.
-            const activeSel = statusFilter.filter((v) => v === 'active' || v === 'inactive')
-            const stockSel = statusFilter.filter((v) => v === 'ok' || v === 'low' || v === 'out')
-            const matchesActive = activeSel.length === 0 || activeSel.includes(row.active ? 'active' : 'inactive')
-            const matchesStock = stockSel.length === 0 || stockSel.includes(stockStatusOf(row))
-
-            return matchesSearch && matchesManufacturer && matchesCategory && matchesActive && matchesStock
-        })
-    }, [rows, search, manufacturerFilter, categoryFilter, statusFilter])
 
     // Resolve manufacturer/category by name against loaded lists, erroring out (rather than
     // silently dropping) when a referenced one does not exist yet.
@@ -303,7 +295,7 @@ export default function ProductsPage() {
             formModal.close()
             setForm(emptyForm)
             setEditingId(null)
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -318,7 +310,7 @@ export default function ProductsPage() {
             deleteModal.close()
             setDeletingItem(null)
             setSelectedIds((prev) => prev.filter((id) => id !== deletingItem.id))
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -332,7 +324,7 @@ export default function ProductsPage() {
             toast.success(t('products.bulkDeleted', { count: selectedIds.length }))
             bulkDeleteModal.close()
             setSelectedIds([])
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -444,14 +436,16 @@ export default function ProductsPage() {
                         <DataToolbar
                             entityLabel="products"
                             exportColumns={exportColumns}
-                            rows={filteredRows}
+                            rows={rows}
+                            fetchRows={fetchAllProducts}
+                            count={total}
                             importConfig={{
                                 canImport: canCreate,
                                 endpoint: '/products',
                                 templateColumns: importColumns,
                                 parseRow: parseImportRow,
                             }}
-                            onImported={loadData}
+                            onImported={reload}
                         />
                         {canManageCategories && (
                             <button onClick={categoryModal.open} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
@@ -474,7 +468,7 @@ export default function ProductsPage() {
                     {
                         key: 'manufacturer',
                         value: manufacturerFilter,
-                        onChange: setManufacturerFilter,
+                        onChange: (v) => setFilter('manufacturer', v),
                         searchable: true,
                         placeholder: t('common.allManufacturers'),
                         options: manufacturers.map((m) => ({ value: String(m.id), label: m.name })),
@@ -482,7 +476,7 @@ export default function ProductsPage() {
                     {
                         key: 'category',
                         value: categoryFilter,
-                        onChange: setCategoryFilter,
+                        onChange: (v) => setFilter('category', v),
                         searchable: true,
                         placeholder: t('common.allCategories'),
                         options: categories.map((c) => ({ value: String(c.id), label: c.name })),
@@ -490,7 +484,7 @@ export default function ProductsPage() {
                     {
                         key: 'status',
                         value: statusFilter,
-                        onChange: setStatusFilter,
+                        onChange: (v) => setFilter('status', v),
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'active', label: t('common.active') },
@@ -506,7 +500,22 @@ export default function ProductsPage() {
             <DataTable
                 tableId="products"
                 columns={columns}
-                rows={filteredRows}
+                rows={rows}
+                total={total}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={Package}
+                        title={t('products.emptyTitle')}
+                        description={t('products.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('products.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 selectable={canDelete}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
@@ -793,7 +802,7 @@ export default function ProductsPage() {
                 endpoint="/categories"
                 module="CATEGORIES"
                 i18nKey="categories"
-                onChanged={loadData}
+                onChanged={() => { loadReferences(); reload() }}
             />
 
             <LotAdjustModal
@@ -801,7 +810,7 @@ export default function ProductsPage() {
                 batches={adjustBatches}
                 isOpen={adjustModal.isOpen}
                 onClose={adjustModal.close}
-                onSaved={loadData}
+                onSaved={reload}
             />
         </div>
     )

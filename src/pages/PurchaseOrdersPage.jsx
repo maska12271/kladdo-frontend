@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiUpload } from '../api/client'
+import { useServerTable } from '../hooks/useServerTable'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusBadge from '../components/StatusBadge'
@@ -82,7 +84,6 @@ export default function PurchaseOrdersPage() {
     const deleteModal = useModal()
     const bulkDeleteModal = useModal()
 
-    const [rows, setRows] = useState([])
     const [manufacturers, setManufacturers] = useState([])
     const [products, setProducts] = useState([])
     const [warehouses, setWarehouses] = useState([])
@@ -91,9 +92,6 @@ export default function PurchaseOrdersPage() {
     const [suggestedOrderNumber, setSuggestedOrderNumber] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
-    const [search, setSearch] = useState('')
-    const [statusFilter, setStatusFilter] = useState([])
-    const [manufacturerFilter, setManufacturerFilter] = useState([])
     const [loading, setLoading] = useState(false)
     const [statusLoading, setStatusLoading] = useState({})
     // Form-level validation message shown in the modal when submit is blocked.
@@ -101,8 +99,37 @@ export default function PurchaseOrdersPage() {
     const [uploadingInvoice, setUploadingInvoice] = useState(false)
     const invoiceInputRef = useRef(null)
 
+    const buildOrdersQuery = ({ page, size, sortBy, sortDir, q, filters }) => {
+        const params = new URLSearchParams()
+        params.set('page', page - 1) // the backend's pages are 0-based
+        params.set('size', size)
+        params.set('sortBy', sortBy)
+        params.set('sortDir', sortDir)
+        if (q) params.set('search', q)
+        if (filters.manufacturer?.length) params.set('manufacturerId', filters.manufacturer.join(','))
+        if (filters.status?.length) params.set('status', filters.status.join(','))
+        return params
+    }
+
+    const {
+        rows, total, loading: listLoading, page, pageSize, q: search, filters,
+        setSearch, setFilter, setPage, setPageSize, reload,
+    } = useServerTable({
+        filterKeys: ['manufacturer', 'status'],
+        fetcher: (params) => apiGet(`/purchase-orders?${buildOrdersQuery(params).toString()}`),
+    })
+
+    const manufacturerFilter = filters.manufacturer
+    const statusFilter = filters.status
+    const filtersActive = !!search || manufacturerFilter.length > 0 || statusFilter.length > 0
+
+    const fetchAllOrders = async () => {
+        const params = buildOrdersQuery({ page: 1, size: 10000, sortBy: 'id', sortDir: 'desc', q: search, filters })
+        return safeArray(await apiGet(`/purchase-orders?${params.toString()}`))
+    }
+
     useEffect(() => {
-        loadData()
+        loadReferences()
     }, [])
 
     // Clear the validation banner as soon as the user edits the form again.
@@ -110,35 +137,18 @@ export default function PurchaseOrdersPage() {
         setFormError('')
     }, [form])
 
-    const loadData = async () => {
-        const [ordersRes, manufacturersRes, productsRes, warehousesRes] = await Promise.all([
-            apiGet('/purchase-orders?page=0&size=500&sortBy=id&sortDir=desc'),
+    // Reference lists for the create form and filters; fetched in full (the order list is paged server-side).
+    const loadReferences = async () => {
+        const [manufacturersRes, productsRes, warehousesRes] = await Promise.all([
             apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/products?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/warehouses'),
         ])
 
-        setRows(safeArray(ordersRes))
         setManufacturers(safeArray(manufacturersRes))
         setProducts(safeArray(productsRes))
         setWarehouses(safeArray(warehousesRes))
     }
-
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const q = search.toLowerCase()
-            const matchesSearch =
-                !search ||
-                row.orderNumber?.toLowerCase().includes(q) ||
-                row.manufacturer?.name?.toLowerCase().includes(q) ||
-                row.status?.toLowerCase().includes(q)
-
-            const matchesStatus = statusFilter.length === 0 || statusFilter.includes(row.status)
-            const matchesManufacturer = manufacturerFilter.length === 0 || manufacturerFilter.includes(String(row.manufacturer?.id))
-
-            return matchesSearch && matchesStatus && matchesManufacturer
-        })
-    }, [rows, search, statusFilter, manufacturerFilter])
 
     // Pre-select the company default warehouse (when it still exists) or the only warehouse, if one.
     const pickDefaultWarehouse = () => {
@@ -349,7 +359,7 @@ export default function PurchaseOrdersPage() {
             formModal.close()
             setEditingId(null)
             setForm(emptyForm)
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -364,7 +374,7 @@ export default function PurchaseOrdersPage() {
             deleteModal.close()
             setDeletingItem(null)
             setSelectedIds((prev) => prev.filter((id) => id !== deletingItem.id))
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -372,12 +382,10 @@ export default function PurchaseOrdersPage() {
 
     const handleStatusChange = async (row, newStatus) => {
         setStatusLoading((prev) => ({ ...prev, [row.id]: true }))
-        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: newStatus } : r)))
         try {
             await apiPatch(`/purchase-orders/${row.id}/status`, { status: newStatus })
             toast.success(t('toast.statusUpdated'))
-        } catch {
-            setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: row.status } : r)))
+            await reload()
         } finally {
             setStatusLoading((prev) => ({ ...prev, [row.id]: false }))
         }
@@ -391,7 +399,7 @@ export default function PurchaseOrdersPage() {
             toast.success(t('purchaseOrders.bulkDeleted', { count: selectedIds.length }))
             bulkDeleteModal.close()
             setSelectedIds([])
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -441,7 +449,9 @@ export default function PurchaseOrdersPage() {
                         <DataToolbar
                             entityLabel="purchase-orders"
                             exportColumns={exportColumns}
-                            rows={filteredRows}
+                            rows={rows}
+                            fetchRows={fetchAllOrders}
+                            count={total}
                         />
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
@@ -459,7 +469,7 @@ export default function PurchaseOrdersPage() {
                     {
                         key: 'manufacturer',
                         value: manufacturerFilter,
-                        onChange: setManufacturerFilter,
+                        onChange: (v) => setFilter('manufacturer', v),
                         searchable: true,
                         placeholder: t('common.allManufacturers'),
                         options: manufacturers.map((m) => ({ value: String(m.id), label: m.name })),
@@ -467,7 +477,7 @@ export default function PurchaseOrdersPage() {
                     {
                         key: 'status',
                         value: statusFilter,
-                        onChange: setStatusFilter,
+                        onChange: (v) => setFilter('status', v),
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'NEW', label: t('statuses.NEW') },
@@ -484,11 +494,30 @@ export default function PurchaseOrdersPage() {
             <DataTable
                 tableId="purchase-orders"
                 columns={columns}
-                rows={filteredRows}
+                rows={rows}
+                total={total}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={FileText}
+                        title={t('purchaseOrders.emptyTitle')}
+                        description={t('purchaseOrders.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('purchaseOrders.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 onRowClick={(row) => navigate(`/purchase-orders/${row.id}`)}
                 selectable={canDelete}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
                 bulkActions={
                     canDelete ? (
                         <button

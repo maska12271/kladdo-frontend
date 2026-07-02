@@ -87,6 +87,14 @@ export default function DataTable({
     pageSize: controlledPageSize,
     onPageChange,
     onPageSizeChange,
+    // Server-side mode. When `total` is provided, `rows` are already just the current page — the table
+    // paginates against `total` instead of slicing. `loading` swaps the body for skeleton rows.
+    total: serverTotal,
+    loading = false,
+    // Rich empty state (a node, e.g. <EmptyState .../>) shown when there are genuinely no records and
+    // no filters are active. `filtersActive` tells "you have nothing yet" apart from "no match".
+    emptyState = null,
+    filtersActive = false,
 }) {
     const { t } = useTranslation()
     const [internalPage, setInternalPage] = useState(1)
@@ -118,17 +126,21 @@ export default function DataTable({
     const setPage = (next) => (onPageChange ? onPageChange(next) : setInternalPage(next))
     const setPageSize = (next) => (onPageSizeChange ? onPageSizeChange(next) : setInternalPageSize(next))
 
-    const total = rows.length
+    // Server mode: the parent already fetched just this page and tells us the grand total.
+    const serverMode = serverTotal != null
+    const total = serverMode ? serverTotal : rows.length
     const totalPages = paginate ? Math.max(1, Math.ceil(total / pageSize)) : 1
 
-    // Keep the current page in range when the row set shrinks (filters, deletes).
+    // Keep the current page in range when the row set shrinks (filters, deletes). Skip while loading
+    // so a deep-linked page isn't reset to 1 before the first server response arrives.
     useEffect(() => {
-        if (page > totalPages) setPage(totalPages)
-    }, [page, totalPages])
+        if (!loading && page > totalPages) setPage(totalPages)
+    }, [page, totalPages, loading])
 
     const safePage = Math.min(page, totalPages)
     const start = paginate ? (safePage - 1) * pageSize : 0
-    const pageRows = paginate ? rows.slice(start, start + pageSize) : rows
+    // In server mode `rows` is already the current page; only client mode slices.
+    const pageRows = paginate && !serverMode ? rows.slice(start, start + pageSize) : rows
 
     const selectionEnabled = selectable && typeof onSelectionChange === 'function'
 
@@ -177,6 +189,12 @@ export default function DataTable({
     const showColumnPicker = tableId && hideableColumns.length > 0
     const rangeStart = total === 0 ? 0 : start + 1
     const rangeEnd = Math.min(start + pageSize, total)
+
+    // Genuinely empty (no records, no active filters, done loading): show the rich empty-state card
+    // instead of an empty table with headers. Filtered-empty still shows the table + a "no results" row.
+    if (emptyState && !filtersActive && !loading && total === 0) {
+        return emptyState
+    }
 
     return (
         <div className={bare ? '' : 'shadow-card overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'}>
@@ -236,10 +254,12 @@ export default function DataTable({
                     </tr>
                     </thead>
                     <tbody>
-                    {total === 0 ? (
+                    {loading && pageRows.length === 0 ? (
+                        <TableSkeleton rows={Math.min(paginate ? pageSize : 6, 8)} columns={totalColumns} />
+                    ) : total === 0 ? (
                         <tr>
                             <td colSpan={totalColumns} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
-                                {t('table.noData')}
+                                {filtersActive ? t('table.noResults') : t('table.noData')}
                             </td>
                         </tr>
                     ) : (
@@ -451,6 +471,24 @@ function ColumnPicker({ columns, hiddenColumns, onToggle, onReset }) {
                     </button>
                 </div>
             )}
+        </>
+    )
+}
+
+// Shimmer placeholder rows shown while the first page of data loads, so the table doesn't flash an
+// empty "no data" state before the request resolves.
+function TableSkeleton({ rows, columns }) {
+    return (
+        <>
+            {Array.from({ length: rows }).map((_, r) => (
+                <tr key={r} className="border-t border-slate-200 dark:border-slate-800" aria-hidden="true">
+                    {Array.from({ length: columns }).map((_, c) => (
+                        <td key={c} className="px-4 py-3.5">
+                            <div className="h-4 w-full max-w-[10rem] animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
+                        </td>
+                    ))}
+                </tr>
+            ))}
         </>
     )
 }

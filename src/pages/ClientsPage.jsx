@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client'
+import { useServerTable } from '../hooks/useServerTable'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusBadge from '../components/StatusBadge'
@@ -16,7 +18,7 @@ import { useToast } from '../context/ToastContext'
 import { safeArray, parseBool } from '../utils/format'
 import {FormField, TextareaField} from "../components/FormField.jsx";
 import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
-import { Eye, Pencil, Trash2, Archive, ArchiveRestore } from 'lucide-react'
+import { Eye, Pencil, Trash2, Archive, ArchiveRestore, Users } from 'lucide-react'
 
 const exportColumns = [
     { header: 'ID', value: (r) => r.id },
@@ -78,20 +80,40 @@ export default function ClientsPage() {
     const deleteModal = useModal()
     const bulkDeleteModal = useModal()
 
-    const [rows, setRows] = useState([])
     const [form, setForm] = useState(emptyForm)
     const [editingId, setEditingId] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
-    const [search, setSearch] = useState('')
-    // Status filter doubles as the archived control: defaults to "active" so archived clients are
-    // hidden until the user selects "archived" (or clears the filter to see both).
-    const [statusFilter, setStatusFilter] = useState(['active'])
     const [loading, setLoading] = useState(false)
 
-    useEffect(() => {
-        loadData()
-    }, [])
+    const buildClientsQuery = ({ page, size, sortBy, sortDir, q, filters }) => {
+        const params = new URLSearchParams()
+        params.set('page', page - 1) // the backend's pages are 0-based
+        params.set('size', size)
+        params.set('sortBy', sortBy)
+        params.set('sortDir', sortDir)
+        if (q) params.set('search', q)
+        if (filters.status?.length) params.set('status', filters.status.join(','))
+        // Archived clients stay hidden unless the user explicitly asks for them via the status filter.
+        params.set('includeArchived', filters.status?.includes('archived') ? 'true' : 'false')
+        return params
+    }
+
+    const {
+        rows, total, loading: listLoading, page, pageSize, q: search, filters,
+        setSearch, setFilter, setPage, setPageSize, reload,
+    } = useServerTable({
+        filterKeys: ['status'],
+        fetcher: (params) => apiGet(`/clients?${buildClientsQuery(params).toString()}`),
+    })
+
+    const statusFilter = filters.status
+    const filtersActive = !!search || statusFilter.length > 0
+
+    const fetchAllClients = async () => {
+        const params = buildClientsQuery({ page: 1, size: 10000, sortBy: 'id', sortDir: 'desc', q: search, filters })
+        return safeArray(await apiGet(`/clients?${params.toString()}`))
+    }
 
     // Deep-link support: ?edit=<id> opens the edit modal once rows are loaded (used by the detail
     // page's Edit button), then clears the param so a refresh/back doesn't reopen it.
@@ -109,30 +131,6 @@ export default function ClientsPage() {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [editId, rows])
-
-    const loadData = async () => {
-        // Load all (including archived) and let the status filter decide what to show client-side; the
-        // order/tender pickers fetch /clients without includeArchived, so they still exclude archived.
-        const response = await apiGet('/clients?page=0&size=500&sortBy=id&sortDir=desc&includeArchived=true')
-        setRows(safeArray(response))
-    }
-
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const q = search.toLowerCase()
-            const matchesSearch =
-                !search ||
-                row.name?.toLowerCase().includes(q) ||
-                row.registrationCode?.toLowerCase().includes(q) ||
-                row.email?.toLowerCase().includes(q) ||
-                row.contactPerson?.toLowerCase().includes(q)
-
-            const matchesStatus =
-                statusFilter.length === 0 || statusFilter.includes(row.archived ? 'archived' : 'active')
-
-            return matchesSearch && matchesStatus
-        })
-    }, [rows, search, statusFilter])
 
     const openCreate = () => {
         setEditingId(null)
@@ -178,7 +176,7 @@ export default function ClientsPage() {
             formModal.close()
             setEditingId(null)
             setForm(emptyForm)
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -193,7 +191,7 @@ export default function ClientsPage() {
             deleteModal.close()
             setDeletingItem(null)
             setSelectedIds((prev) => prev.filter((id) => id !== deletingItem.id))
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -203,7 +201,7 @@ export default function ClientsPage() {
         await apiPut(`/clients/${item.id}/${item.archived ? 'unarchive' : 'archive'}`, {})
         toast.success(item.archived ? t('clients.unarchived') : t('clients.archived'))
         setSelectedIds((prev) => prev.filter((id) => id !== item.id))
-        await loadData()
+        await reload()
     }
 
     const handleBulkDelete = async () => {
@@ -214,7 +212,7 @@ export default function ClientsPage() {
             toast.success(t('clients.bulkDeleted', { count: selectedIds.length }))
             bulkDeleteModal.close()
             setSelectedIds([])
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -264,14 +262,16 @@ export default function ClientsPage() {
                         <DataToolbar
                             entityLabel="clients"
                             exportColumns={exportColumns}
-                            rows={filteredRows}
+                            rows={rows}
+                            fetchRows={fetchAllClients}
+                            count={total}
                             importConfig={{
                                 canImport: canCreate,
                                 endpoint: '/clients',
                                 templateColumns: importColumns,
                                 parseRow: parseImportRow,
                             }}
-                            onImported={loadData}
+                            onImported={reload}
                         />
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
@@ -289,7 +289,7 @@ export default function ClientsPage() {
                     {
                         key: 'status',
                         value: statusFilter,
-                        onChange: setStatusFilter,
+                        onChange: (v) => setFilter('status', v),
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'active', label: t('common.active') },
@@ -302,11 +302,30 @@ export default function ClientsPage() {
             <DataTable
                 tableId="clients"
                 columns={columns}
-                rows={filteredRows}
+                rows={rows}
+                total={total}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={Users}
+                        title={t('clients.emptyTitle')}
+                        description={t('clients.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('clients.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 selectable={canDelete}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
                 onRowClick={(row) => navigate(`/clients/${row.id}`)}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
                 bulkActions={
                     canDelete ? (
                         <button

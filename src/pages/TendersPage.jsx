@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client'
+import { useServerTable } from '../hooks/useServerTable'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusBadge from '../components/StatusBadge'
@@ -16,7 +18,7 @@ import QuickCreateModal from '../components/QuickCreateModal'
 import { useToast } from '../context/ToastContext'
 import { formatDate, formatMoney, safeArray } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
-import { Pencil, Trash2, Users } from 'lucide-react'
+import { Pencil, Trash2, Users, ClipboardList } from 'lucide-react'
 
 const emptyTenderForm = {
     title: '',
@@ -63,7 +65,6 @@ export default function TendersPage() {
     const participantDeleteModal = useModal()
     const participantBulkDeleteModal = useModal()
 
-    const [rows, setRows] = useState([])
     const [clients, setClients] = useState([])
     const [participants, setParticipants] = useState([])
     const [form, setForm] = useState(emptyTenderForm)
@@ -75,20 +76,43 @@ export default function TendersPage() {
     const [deletingParticipant, setDeletingParticipant] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
     const [selectedParticipantIds, setSelectedParticipantIds] = useState([])
-    const [search, setSearch] = useState('')
-    const [statusFilter, setStatusFilter] = useState([])
     const [loading, setLoading] = useState(false)
 
+    const buildTendersQuery = ({ page, size, sortBy, sortDir, q, filters }) => {
+        const params = new URLSearchParams()
+        params.set('page', page - 1) // the backend's pages are 0-based
+        params.set('size', size)
+        params.set('sortBy', sortBy)
+        params.set('sortDir', sortDir)
+        if (q) params.set('search', q)
+        if (filters.status?.length) params.set('status', filters.status.join(','))
+        return params
+    }
+
+    const {
+        rows, total, loading: listLoading, page, pageSize, q: search, filters,
+        setSearch, setFilter, setPage, setPageSize, reload,
+    } = useServerTable({
+        filterKeys: ['status'],
+        fetcher: (params) => apiGet(`/tenders?${buildTendersQuery(params).toString()}`),
+    })
+
+    const statusFilter = filters.status
+    const filtersActive = !!search || statusFilter.length > 0
+
+    const fetchAllTenders = async () => {
+        const params = buildTendersQuery({ page: 1, size: 10000, sortBy: 'id', sortDir: 'desc', q: search, filters })
+        return safeArray(await apiGet(`/tenders?${params.toString()}`))
+    }
+
     useEffect(() => {
-        loadData()
+        loadReferences()
     }, [])
 
-    const loadData = async () => {
-        const [tendersRes, clientsRes] = await Promise.all([
-            apiGet('/tenders?page=0&size=500&sortBy=id&sortDir=desc'),
-            apiGet('/clients?page=0&size=500&sortBy=id&sortDir=asc'),
-        ])
-        setRows(safeArray(tendersRes))
+    // Clients populate the tender form's client picker; fetched in full (the tender list is paged
+    // server-side).
+    const loadReferences = async () => {
+        const clientsRes = await apiGet('/clients?page=0&size=500&sortBy=id&sortDir=asc')
         setClients(safeArray(clientsRes))
     }
 
@@ -96,22 +120,6 @@ export default function TendersPage() {
         const response = await apiGet(`/tenders/${tenderId}/participants`)
         setParticipants(safeArray(response))
     }
-
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const q = search.toLowerCase()
-            const matchesSearch =
-                !search ||
-                row.title?.toLowerCase().includes(q) ||
-                row.tenderNumber?.toLowerCase().includes(q) ||
-                row.customerName?.toLowerCase().includes(q) ||
-                row.clientName?.toLowerCase().includes(q)
-
-            const matchesStatus = statusFilter.length === 0 || statusFilter.includes(row.status)
-
-            return matchesSearch && matchesStatus
-        })
-    }, [rows, search, statusFilter])
 
     const openCreate = () => {
         setEditingId(null)
@@ -208,7 +216,7 @@ export default function TendersPage() {
             formModal.close()
             setEditingId(null)
             setForm(emptyTenderForm)
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -223,7 +231,7 @@ export default function TendersPage() {
             deleteModal.close()
             setDeletingItem(null)
             setSelectedIds((prev) => prev.filter((id) => id !== deletingItem.id))
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -237,7 +245,7 @@ export default function TendersPage() {
             toast.success(t('tenders.bulkDeleted', { count: selectedIds.length }))
             bulkDeleteModal.close()
             setSelectedIds([])
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -340,7 +348,9 @@ export default function TendersPage() {
                         <DataToolbar
                             entityLabel="tenders"
                             exportColumns={exportColumns}
-                            rows={filteredRows}
+                            rows={rows}
+                            fetchRows={fetchAllTenders}
+                            count={total}
                         />
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
@@ -358,7 +368,7 @@ export default function TendersPage() {
                     {
                         key: 'status',
                         value: statusFilter,
-                        onChange: setStatusFilter,
+                        onChange: (v) => setFilter('status', v),
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'OPEN', label: t('statuses.OPEN') },
@@ -374,10 +384,29 @@ export default function TendersPage() {
             <DataTable
                 tableId="tenders"
                 columns={columns}
-                rows={filteredRows}
+                rows={rows}
+                total={total}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={ClipboardList}
+                        title={t('tenders.emptyTitle')}
+                        description={t('tenders.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('tenders.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 selectable={canDelete}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
                 bulkActions={
                     canDelete ? (
                         <button

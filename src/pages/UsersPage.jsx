@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusBadge from '../components/StatusBadge'
@@ -81,15 +82,23 @@ export default function UsersPage() {
     const [statusFilter, setStatusFilter] = useState([])
     const [roleFilter, setRoleFilter] = useState([])
     const [loading, setLoading] = useState(false)
+    const [listLoading, setListLoading] = useState(true)
     const [error, setError] = useState('')
+
+    const filtersActive = !!search || statusFilter.length > 0 || roleFilter.length > 0
 
     useEffect(() => {
         loadData()
     }, [])
 
     const loadData = async () => {
-        const response = await apiGet('/users')
-        setRows(safeArray(response))
+        setListLoading(true)
+        try {
+            const response = await apiGet('/users')
+            setRows(safeArray(response))
+        } finally {
+            setListLoading(false)
+        }
     }
 
     const filteredRows = useMemo(() => {
@@ -379,6 +388,20 @@ export default function UsersPage() {
                 tableId="users"
                 columns={columns}
                 rows={filteredRows}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={User}
+                        title={t('users.emptyTitle')}
+                        description={t('users.emptyDesc')}
+                        action={
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('users.add')}
+                            </button>
+                        }
+                    />
+                }
                 selectable
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}

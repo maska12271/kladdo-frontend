@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Eye, Pencil, Trash2 } from 'lucide-react'
+import { Eye, Pencil, Trash2, Warehouse } from 'lucide-react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import StatusBadge from '../components/StatusBadge'
 import ActionMenu from '../components/ActionMenu'
@@ -35,6 +36,9 @@ export default function WarehousesPage() {
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState([])
     const [loading, setLoading] = useState(false)
+    const [listLoading, setListLoading] = useState(true)
+
+    const filtersActive = !!search || statusFilter.length > 0
 
     useEffect(() => { loadData() }, [])
 
@@ -54,8 +58,13 @@ export default function WarehousesPage() {
     }, [editId, rows])
 
     const loadData = async () => {
-        const response = await apiGet('/warehouses')
-        setRows(safeArray(response))
+        setListLoading(true)
+        try {
+            const response = await apiGet('/warehouses')
+            setRows(safeArray(response))
+        } finally {
+            setListLoading(false)
+        }
     }
 
     const filteredRows = useMemo(() => {
@@ -186,6 +195,20 @@ export default function WarehousesPage() {
                 tableId="warehouses"
                 columns={columns}
                 rows={filteredRows}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={Warehouse}
+                        title={t('warehouses.emptyTitle')}
+                        description={t('warehouses.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('warehouses.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 onRowClick={(row) => navigate(`/warehouses/${row.id}`)}
             />
 

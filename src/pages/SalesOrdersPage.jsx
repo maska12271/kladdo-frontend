@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../api/client'
+import { useServerTable } from '../hooks/useServerTable'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
+import EmptyState from '../components/EmptyState'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
 import StatusPicker from '../components/StatusPicker'
@@ -20,7 +22,7 @@ import { useToast } from '../context/ToastContext'
 import { formatDate, formatMoney, safeArray } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
 import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
-import { Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2, ShoppingCart } from 'lucide-react'
 
 const exportColumns = [
     { header: 'ID', value: (r) => r.id },
@@ -90,7 +92,6 @@ export default function SalesOrdersPage() {
     const deleteModal = useModal()
     const bulkDeleteModal = useModal()
 
-    const [rows, setRows] = useState([])
     const [clients, setClients] = useState([])
     const [products, setProducts] = useState([])
     const [warehouses, setWarehouses] = useState([])
@@ -100,14 +101,55 @@ export default function SalesOrdersPage() {
     const [suggestedOrderNumber, setSuggestedOrderNumber] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
-    const [search, setSearch] = useState('')
-    const [statusFilter, setStatusFilter] = useState([])
-    const [clientFilter, setClientFilter] = useState([])
-    const [paymentStatusFilter, setPaymentStatusFilter] = useState([])
     // orderId -> derived billing summary (payment status, amount due, penalty). Orders absent from the
     // map are treated as NOT_INVOICED.
     const [paymentByOrder, setPaymentByOrder] = useState({})
     const [loading, setLoading] = useState(false)
+
+    // Builds the /sales-orders query for the current page + filters. Payment status is derived, not a
+    // column: it is resolved to an id include/exclude set from the billing summaries (see below).
+    const buildOrdersQuery = ({ page, size, sortBy, sortDir, q, filters }) => {
+        const params = new URLSearchParams()
+        params.set('page', page - 1) // the backend's pages are 0-based
+        params.set('size', size)
+        params.set('sortBy', sortBy)
+        params.set('sortDir', sortDir)
+        if (q) params.set('search', q)
+        if (filters.client?.length) params.set('clientId', filters.client.join(','))
+        if (filters.status?.length) params.set('status', filters.status.join(','))
+        const paySel = filters.paymentStatus || []
+        if (paySel.length) {
+            const orderIds = Object.keys(paymentByOrder)
+            if (paySel.includes('NOT_INVOICED')) {
+                // NOT_INVOICED orders are absent from the summary map, so exclude the invoiced orders
+                // whose status isn't selected rather than trying to enumerate the (unknown) rest.
+                const exclude = orderIds.filter((id) => !paySel.includes(paymentByOrder[id].paymentStatus)).map(Number)
+                if (exclude.length) params.set('excludeId', exclude.join(','))
+            } else {
+                const include = orderIds.filter((id) => paySel.includes(paymentByOrder[id].paymentStatus)).map(Number)
+                params.set('id', include.length ? include.join(',') : '-1') // -1 → forces an empty page
+            }
+        }
+        return params
+    }
+
+    const {
+        rows, total, loading: listLoading, page, pageSize, q: search, filters,
+        setSearch, setFilter, setPage, setPageSize, reload,
+    } = useServerTable({
+        filterKeys: ['client', 'status', 'paymentStatus'],
+        fetcher: (params) => apiGet(`/sales-orders?${buildOrdersQuery(params).toString()}`),
+    })
+
+    const statusFilter = filters.status
+    const clientFilter = filters.client
+    const paymentStatusFilter = filters.paymentStatus
+    const filtersActive = !!search || statusFilter.length > 0 || clientFilter.length > 0 || paymentStatusFilter.length > 0
+
+    const fetchAllOrders = async () => {
+        const params = buildOrdersQuery({ page: 1, size: 10000, sortBy: 'id', sortDir: 'desc', q: search, filters })
+        return safeArray(await apiGet(`/sales-orders?${params.toString()}`))
+    }
     const [statusLoading, setStatusLoading] = useState({})
     // productId -> on-hand quantity in the currently selected warehouse (for availability hints).
     const [stockLevels, setStockLevels] = useState({})
@@ -118,7 +160,7 @@ export default function SalesOrdersPage() {
     const [editBaseline, setEditBaseline] = useState(null)
 
     useEffect(() => {
-        loadData()
+        loadReferences()
     }, [])
 
     // Clear the validation banner as soon as the user edits the form again.
@@ -150,16 +192,15 @@ export default function SalesOrdersPage() {
         }
     }, [form.warehouseId, formModal.isOpen])
 
-    const loadData = async () => {
-        const [ordersRes, clientsRes, productsRes, warehousesRes, taxRes] = await Promise.all([
-            apiGet('/sales-orders?page=0&size=500&sortBy=id&sortDir=desc'),
+    // Reference lists for the form + filters (fetched in full — the order list is paged server-side).
+    const loadReferences = async () => {
+        const [clientsRes, productsRes, warehousesRes, taxRes] = await Promise.all([
             apiGet('/clients?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/products?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/warehouses'),
             apiGet('/settings/tax-rates'),
         ])
 
-        setRows(safeArray(ordersRes))
         setClients(safeArray(clientsRes))
         setProducts(safeArray(productsRes))
         setWarehouses(safeArray(warehousesRes))
@@ -173,6 +214,9 @@ export default function SalesOrdersPage() {
                 const map = {}
                 for (const s of safeArray(summaries)) map[s.orderId] = s
                 setPaymentByOrder(map)
+                // The initial list query ran before payment statuses were known; if a payment filter is
+                // active (e.g. restored from the URL), re-run it now that we can resolve those ids.
+                if (filters.paymentStatus.length) reload()
             } catch {
                 setPaymentByOrder({})
             }
@@ -180,25 +224,6 @@ export default function SalesOrdersPage() {
     }
 
     const paymentFor = (row) => paymentByOrder[row.id] || NO_PAYMENT
-
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const q = search.toLowerCase()
-            const matchesSearch =
-                !search ||
-                row.orderNumber?.toLowerCase().includes(q) ||
-                row.client?.name?.toLowerCase().includes(q) ||
-                row.status?.toLowerCase().includes(q)
-
-            const matchesStatus = statusFilter.length === 0 || statusFilter.includes(row.status)
-            const matchesClient = clientFilter.length === 0 || clientFilter.includes(String(row.client?.id))
-            const matchesPayment =
-                paymentStatusFilter.length === 0 ||
-                paymentStatusFilter.includes((paymentByOrder[row.id] || NO_PAYMENT).paymentStatus)
-
-            return matchesSearch && matchesStatus && matchesClient && matchesPayment
-        })
-    }, [rows, search, statusFilter, clientFilter, paymentStatusFilter, paymentByOrder])
 
     // Active tax rates as picker options; the value is the percentage (snapshotted onto the line).
     const taxOptions = useMemo(() => {
@@ -414,7 +439,7 @@ export default function SalesOrdersPage() {
             formModal.close()
             setEditingId(null)
             setForm(emptyForm)
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -429,7 +454,7 @@ export default function SalesOrdersPage() {
             deleteModal.close()
             setDeletingItem(null)
             setSelectedIds((prev) => prev.filter((id) => id !== deletingItem.id))
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -437,14 +462,10 @@ export default function SalesOrdersPage() {
 
     const handleStatusChange = async (row, newStatus) => {
         setStatusLoading((prev) => ({ ...prev, [row.id]: true }))
-        // Optimistic update
-        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: newStatus } : r)))
         try {
             await apiPatch(`/sales-orders/${row.id}/status`, { status: newStatus })
             toast.success(t('toast.statusUpdated'))
-        } catch {
-            // Revert on failure
-            setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: row.status } : r)))
+            await reload()
         } finally {
             setStatusLoading((prev) => ({ ...prev, [row.id]: false }))
         }
@@ -458,7 +479,7 @@ export default function SalesOrdersPage() {
             toast.success(t('salesOrders.bulkDeleted', { count: selectedIds.length }))
             bulkDeleteModal.close()
             setSelectedIds([])
-            await loadData()
+            await reload()
         } finally {
             setLoading(false)
         }
@@ -530,7 +551,9 @@ export default function SalesOrdersPage() {
                         <DataToolbar
                             entityLabel="sales-orders"
                             exportColumns={exportColumns}
-                            rows={filteredRows}
+                            rows={rows}
+                            fetchRows={fetchAllOrders}
+                            count={total}
                         />
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
@@ -548,7 +571,7 @@ export default function SalesOrdersPage() {
                     {
                         key: 'client',
                         value: clientFilter,
-                        onChange: setClientFilter,
+                        onChange: (v) => setFilter('client', v),
                         placeholder: t('common.allClients'),
                         searchable: true,
                         options: clients.map((c) => ({ value: String(c.id), label: c.name })),
@@ -556,7 +579,7 @@ export default function SalesOrdersPage() {
                     {
                         key: 'status',
                         value: statusFilter,
-                        onChange: setStatusFilter,
+                        onChange: (v) => setFilter('status', v),
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'NEW', label: t('statuses.NEW') },
@@ -571,7 +594,7 @@ export default function SalesOrdersPage() {
                         ? [{
                             key: 'paymentStatus',
                             value: paymentStatusFilter,
-                            onChange: setPaymentStatusFilter,
+                            onChange: (v) => setFilter('paymentStatus', v),
                             placeholder: t('salesOrders.allPaymentStatuses'),
                             options: PAYMENT_STATUSES.map((s) => ({ value: s, label: t(`statuses.${s}`) })),
                         }]
@@ -582,11 +605,30 @@ export default function SalesOrdersPage() {
             <DataTable
                 tableId="sales-orders"
                 columns={columns}
-                rows={filteredRows}
+                rows={rows}
+                total={total}
+                loading={listLoading}
+                filtersActive={filtersActive}
+                emptyState={
+                    <EmptyState
+                        icon={ShoppingCart}
+                        title={t('salesOrders.emptyTitle')}
+                        description={t('salesOrders.emptyDesc')}
+                        action={canCreate ? (
+                            <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
+                                {t('salesOrders.add')}
+                            </button>
+                        ) : null}
+                    />
+                }
                 onRowClick={(row) => navigate(`/sales-orders/${row.id}`)}
                 selectable={canDelete}
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
                 bulkActions={
                     canDelete ? (
                         <button
