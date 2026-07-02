@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { UploadCloud, X, Loader2 } from 'lucide-react'
 import { apiUpload } from '../api/client'
 
-const BACKEND_BASE = 'http://localhost:8080'
+// Uploaded files are served from the backend origin (the API base minus its trailing `/api`).
+const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api').replace(/\/api\/?$/, '')
 const MAX_SIZE = 5 * 1024 * 1024 // 5 MB — keep in sync with backend multipart limit
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 const ACCEPTED_LABEL = 'JPG, PNG, GIF or WebP'

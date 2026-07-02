@@ -30,7 +30,7 @@ function LanguageSwitcher() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-medium hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
             >
                 <Languages className="h-5 w-5" />
-                <span>{current.short}</span>
+                <span className={"h-5 flex items-center"}>{current.short}</span>
             </button>
             {open && (
                 <div

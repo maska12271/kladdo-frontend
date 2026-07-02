@@ -8,6 +8,7 @@ import StatusBadge from '../components/StatusBadge'
 import DataTable from '../components/DataTable'
 import LoadingBlock from '../components/LoadingBlock'
 import TrendChart from '../components/TrendChart'
+import CopyButton from '../components/CopyButton'
 import { usePermissions } from '../context/AuthContext'
 import { formatMoney, formatDate } from '../utils/format'
 import { PERIOD_KEYS, periodRange } from '../utils/period'
@@ -99,9 +100,9 @@ export default function ClientDetailPage() {
             {/* Facts */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-5 md:grid-cols-3">
-                    <Fact label={t('clientDetail.facts.registrationCode')} value={client.registrationCode || '—'} />
-                    <Fact label={t('common.email')} value={client.email || '—'} />
-                    <Fact label={t('common.phone')} value={client.phone || '—'} />
+                    <Fact label={t('clientDetail.facts.registrationCode')} value={client.registrationCode || '—'} copyValue={client.registrationCode} />
+                    <Fact label={t('common.email')} value={client.email || '—'} copyValue={client.email} />
+                    <Fact label={t('common.phone')} value={client.phone || '—'} copyValue={client.phone} />
                     <Fact label={t('clientDetail.facts.contactPerson')} value={client.contactPerson || '—'} />
                     <Fact label={t('common.address')} value={client.address || '—'} />
                 </dl>
@@ -203,11 +204,18 @@ function BackButton({ onClick, label }) {
     )
 }
 
-function Fact({ label, value }) {
+function Fact({ label, value, copyValue }) {
     return (
         <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            {copyValue ? (
+                <dd className="mt-1 flex items-center gap-1.5 text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <span className="min-w-0 truncate">{value}</span>
+                    <CopyButton value={copyValue} />
+                </dd>
+            ) : (
+                <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            )}
         </div>
     )
 }

@@ -1,6 +1,6 @@
-# Tender Frontend
+# Kladdo Frontend
 
-Tender Frontend is a React + Vite single‑page application that provides a dashboard UI for the TenderApp backend. It is focused on managing companies, clients, products, tenders, and orders through a clean, admin-style interface.
+Kladdo Frontend is a React + Vite single‑page application that provides a dashboard UI for the Kladdo backend. It is focused on managing companies, clients, products, tenders, and orders through a clean, admin-style interface.
 
 ## Features
 
@@ -33,7 +33,7 @@ Tender Frontend is a React + Vite single‑page application that provides a dash
 ## Project Structure
 
 ```text
-tender-frontend/
+kladdo-frontend/
 ├── index.html
 ├── package.json
 ├── vite.config.js
@@ -62,7 +62,7 @@ tender-frontend/
 ### Install dependencies
 
 ```bash
-cd tender-frontend
+cd kladdo-frontend
 npm install
 ```
 
@@ -94,7 +94,7 @@ npm run preview
 
 ## Connecting to the Backend
 
-By default, the frontend should point to the TenderApp backend running on:
+By default, the frontend should point to the Kladdo backend running on:
 
 ```text
 http://localhost:8080

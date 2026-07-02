@@ -15,7 +15,8 @@ import { usePermissions } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { safeArray, parseBool } from '../utils/format'
 import {FormField, TextareaField} from "../components/FormField.jsx";
-import { Eye, Pencil, Trash2 } from 'lucide-react'
+import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
+import { Eye, Pencil, Trash2, Archive, ArchiveRestore } from 'lucide-react'
 
 const exportColumns = [
     { header: 'ID', value: (r) => r.id },
@@ -26,7 +27,7 @@ const exportColumns = [
     { header: 'Address', value: (r) => r.address },
     { header: 'Contact person', value: (r) => r.contactPerson },
     { header: 'Notes', value: (r) => r.notes },
-    { header: 'Active', value: (r) => (r.active ? 'Active' : 'Inactive') },
+    { header: 'Status', value: (r) => (r.archived ? 'Archived' : 'Active') },
 ]
 
 const importColumns = [
@@ -83,7 +84,9 @@ export default function ClientsPage() {
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
     const [search, setSearch] = useState('')
-    const [statusFilter, setStatusFilter] = useState([])
+    // Status filter doubles as the archived control: defaults to "active" so archived clients are
+    // hidden until the user selects "archived" (or clears the filter to see both).
+    const [statusFilter, setStatusFilter] = useState(['active'])
     const [loading, setLoading] = useState(false)
 
     useEffect(() => {
@@ -108,7 +111,9 @@ export default function ClientsPage() {
     }, [editId, rows])
 
     const loadData = async () => {
-        const response = await apiGet('/clients?page=0&size=500&sortBy=id&sortDir=desc')
+        // Load all (including archived) and let the status filter decide what to show client-side; the
+        // order/tender pickers fetch /clients without includeArchived, so they still exclude archived.
+        const response = await apiGet('/clients?page=0&size=500&sortBy=id&sortDir=desc&includeArchived=true')
         setRows(safeArray(response))
     }
 
@@ -123,7 +128,7 @@ export default function ClientsPage() {
                 row.contactPerson?.toLowerCase().includes(q)
 
             const matchesStatus =
-                statusFilter.length === 0 || statusFilter.includes(row.active ? 'active' : 'inactive')
+                statusFilter.length === 0 || statusFilter.includes(row.archived ? 'archived' : 'active')
 
             return matchesSearch && matchesStatus
         })
@@ -194,6 +199,13 @@ export default function ClientsPage() {
         }
     }
 
+    const handleArchiveToggle = async (item) => {
+        await apiPut(`/clients/${item.id}/${item.archived ? 'unarchive' : 'archive'}`, {})
+        toast.success(item.archived ? t('clients.unarchived') : t('clients.archived'))
+        setSelectedIds((prev) => prev.filter((id) => id !== item.id))
+        await loadData()
+    }
+
     const handleBulkDelete = async () => {
         if (selectedIds.length === 0) return
         setLoading(true)
@@ -217,7 +229,7 @@ export default function ClientsPage() {
         {
             key: 'active',
             label: t('common.status'),
-            render: (row) => <StatusBadge status={row.active ? 'ACTIVE' : 'INACTIVE'} />,
+            render: (row) => <StatusBadge status={row.archived ? 'ARCHIVED' : 'ACTIVE'} />,
         },
         {
             key: 'actions',
@@ -228,6 +240,12 @@ export default function ClientsPage() {
                         actions={[
                             { key: 'view', label: t('common.viewDetails'), icon: Eye, onClick: () => navigate(`/clients/${row.id}`) },
                             ...(canEdit ? [{ key: 'edit', label: t('common.edit'), icon: Pencil, onClick: () => openEdit(row) }] : []),
+                            ...(canEdit ? [{
+                                key: 'archive',
+                                label: row.archived ? t('clients.unarchive') : t('clients.archive'),
+                                icon: row.archived ? ArchiveRestore : Archive,
+                                onClick: () => handleArchiveToggle(row),
+                            }] : []),
                             ...(canDelete ? [{ key: 'delete', label: t('common.delete'), icon: Trash2, danger: true, onClick: () => openDelete(row) }] : []),
                         ]}
                     />
@@ -275,7 +293,7 @@ export default function ClientsPage() {
                         placeholder: t('common.allStatuses'),
                         options: [
                             { value: 'active', label: t('common.active') },
-                            { value: 'inactive', label: t('common.inactive') },
+                            { value: 'archived', label: t('statuses.ARCHIVED') },
                         ],
                     },
                 ]}
@@ -375,7 +393,7 @@ export default function ClientsPage() {
                         className="md:col-span-2"
                     />
 
-                    <FormField
+                    <AddressAutocompleteField
                         id="client-address"
                         label={t('common.address')}
                         name="address"
@@ -394,17 +412,6 @@ export default function ClientsPage() {
                         placeholder={t('common.notes')}
                         className="md:col-span-4"
                     />
-
-                    <label className="md:col-span-4 inline-flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
-                        <input
-                            type="checkbox"
-                            name="active"
-                            checked={form.active}
-                            onChange={handleChange}
-                            className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
-                        />
-                        <span className="font-medium text-slate-700 dark:text-slate-200">{t('common.active')}</span>
-                    </label>
 
                     <div className="md:col-span-4 flex justify-end gap-3">
                         <button

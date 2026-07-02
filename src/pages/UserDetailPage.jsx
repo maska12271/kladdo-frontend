@@ -10,6 +10,7 @@ import StatusBadge from '../components/StatusBadge'
 import DataTable from '../components/DataTable'
 import LoadingBlock from '../components/LoadingBlock'
 import TrendChart from '../components/TrendChart'
+import CopyButton from '../components/CopyButton'
 import { formatMoney, formatDate, safeArray } from '../utils/format'
 import { PERIOD_KEYS, periodRange } from '../utils/period'
 import { PERMISSION_MODULES } from '../constants/modules'
@@ -18,6 +19,7 @@ const ROLE_BADGE = {
     OWNER: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
     ADMINISTRATOR: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
     USER: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+    WAREHOUSE: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
 }
 
 const PERMISSION_ACTIONS = [
@@ -58,6 +60,21 @@ function summarize(salesLines, purchaseLines) {
         purchaseCount,
         avgSalesValue: salesCount ? salesRevenue / salesCount : 0,
     }
+}
+
+// Inventory-adjustment rollup for warehouse profiles: how many movements, and how many units were
+// added vs removed across them.
+function summarizeAdjustments(adjustments) {
+    let count = 0
+    let added = 0
+    let removed = 0
+    for (const a of adjustments) {
+        count += 1
+        const q = Number(a.quantityChange) || 0
+        if (q >= 0) added += q
+        else removed += -q
+    }
+    return { count, added, removed }
 }
 
 function buildMonthly(salesLines, purchaseLines) {
@@ -107,6 +124,9 @@ export default function UserDetailPage() {
     const [permError, setPermError] = useState('')
     const [savingPerms, setSavingPerms] = useState(false)
     const [archiving, setArchiving] = useState(false)
+    const [allWarehouses, setAllWarehouses] = useState([])
+    const [assignedWarehouseIds, setAssignedWarehouseIds] = useState([])
+    const [savingWarehouses, setSavingWarehouses] = useState(false)
 
     useEffect(() => {
         let cancelled = false
@@ -119,6 +139,7 @@ export default function UserDetailPage() {
                 if (cancelled) return
                 setUser(userRes)
                 setDetails(detailsRes)
+                if (userRes.warehouseIds) setAssignedWarehouseIds(userRes.warehouseIds)
             })
             .catch(() => !cancelled && setError(true))
             .finally(() => !cancelled && setLoading(false))
@@ -137,12 +158,30 @@ export default function UserDetailPage() {
         setPermError('')
         apiGet(`/users/${id}/permissions`)
             .then((res) => !cancelled && setPermRows(safeArray(res)))
-            .catch((err) => !cancelled && setPermError(err.message || 'Could not load permissions'))
+            .catch((err) => !cancelled && setPermError(err.message || t('errors.serverError')))
             .finally(() => !cancelled && setPermLoading(false))
         return () => {
             cancelled = true
         }
     }, [tab, id, permRows])
+
+    useEffect(() => {
+        if (tab !== 'settings' || allWarehouses.length > 0) return
+        apiGet('/warehouses').then((res) => setAllWarehouses(safeArray(res))).catch(() => {})
+    }, [tab, allWarehouses.length])
+
+    const handleSaveWarehouses = async () => {
+        setSavingWarehouses(true)
+        try {
+            const ids = await apiPut(`/users/${id}/warehouses`, { warehouseIds: assignedWarehouseIds })
+            setAssignedWarehouseIds(ids)
+            toast.success(t('userDetail.settings.warehousesUpdated'))
+        } catch (err) {
+            toast.error?.(err.message || t('users.couldNotSavePermissions'))
+        } finally {
+            setSavingWarehouses(false)
+        }
+    }
 
     const range = periodRange(period)
     const rangeCaption = range ? `${formatDate(range.start)} – ${formatDate(range.end)}` : 'All time'
@@ -155,6 +194,13 @@ export default function UserDetailPage() {
     const filteredSales = allSales.filter((o) => inRange(o.orderDate))
     const filteredPurchases = allPurchases.filter((o) => inRange(o.orderDate))
     const summary = summarize(filteredSales, filteredPurchases)
+
+    // Warehouse staff don't author orders; their activity is stock adjustments instead.
+    const allAdjustments = details?.inventoryAdjustments || []
+    const adjDateOf = (a) => (a.createdAt || '').slice(0, 10)
+    const lifetimeAdj = useMemo(() => summarizeAdjustments(allAdjustments), [details])
+    const filteredAdjustments = allAdjustments.filter((a) => inRange(adjDateOf(a)))
+    const adjSummary = summarizeAdjustments(filteredAdjustments)
     const monthly = useMemo(
         () => buildMonthly(filteredSales, filteredPurchases),
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,7 +219,8 @@ export default function UserDetailPage() {
 
     const isOwner = user.role === 'OWNER'
     const isSelf = user.id === currentUser?.id
-    const isRestrictable = user.role === 'USER'
+    const isRestrictable = user.role === 'USER' || user.role === 'WAREHOUSE'
+    const isWarehouse = user.role === 'WAREHOUSE'
     const canEditRights = isAdmin && isRestrictable
 
     const salesRows = filteredSales.map((o, i) => ({ ...o, _rid: `s-${o.orderId}-${i}` }))
@@ -236,7 +283,10 @@ export default function UserDetailPage() {
                     </div>
                     <div className="space-y-1.5">
                         <h1 className="text-2xl font-bold tracking-tight">{user.fullName || user.email}</h1>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">{user.email}</p>
+                        <p className="flex items-center gap-1 text-sm text-slate-500 dark:text-slate-400">
+                            <span className="truncate">{user.email}</span>
+                            <CopyButton value={user.email} />
+                        </p>
                         <div className="flex flex-wrap items-center gap-1.5">
                             <span className={`rounded-full px-3 py-1 text-xs font-semibold ${ROLE_BADGE[user.role] || ROLE_BADGE.USER}`}>
                                 {t(`roles.${user.role}`)}
@@ -274,7 +324,7 @@ export default function UserDetailPage() {
                     <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
                         <dl className="grid grid-cols-2 gap-x-4 gap-y-5 md:grid-cols-3">
                             <Fact label={t('userDetail.general.fullName')} value={user.fullName || '—'} />
-                            <Fact label={t('common.email')} value={user.email} />
+                            <Fact label={t('common.email')} value={user.email} copyValue={user.email} />
                             <Fact label={t('userDetail.general.role')} value={t(`roles.${user.role}`)} />
                             <Fact label={t('userDetail.general.accountStatus')} value={user.archived ? t('userDetail.general.archived') : t('userDetail.general.active')} />
                             <Fact label={t('userDetail.general.company')} value={user.companyName || '—'} />
@@ -283,12 +333,20 @@ export default function UserDetailPage() {
 
                     <div>
                         <h2 className="mb-3 text-lg font-semibold">{t('userDetail.general.lifetime')}</h2>
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                            <StatCard title={t('userDetail.general.salesOrdersCreated')} value={lifetime.salesCount} hint={t('userDetail.general.allTime')} color="teal" />
-                            <StatCard title={t('userDetail.general.salesValue')} value={formatMoney(lifetime.salesRevenue)} hint={t('userDetail.general.exclCancelled')} color="teal" />
-                            <StatCard title={t('userDetail.general.purchaseOrdersCreated')} value={lifetime.purchaseCount} hint={t('userDetail.general.allTime')} color="amber" />
-                            <StatCard title={t('userDetail.general.purchaseValue')} value={formatMoney(lifetime.purchaseSpend)} hint={t('userDetail.general.exclCancelled')} color="amber" />
-                        </div>
+                        {isWarehouse ? (
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                <StatCard title={t('userDetail.inventory.adjustments')} value={lifetimeAdj.count} hint={t('userDetail.general.allTime')} color="blue" />
+                                <StatCard title={t('userDetail.inventory.itemsAdded')} value={lifetimeAdj.added} hint={t('userDetail.inventory.unitsAddedHint')} color="teal" />
+                                <StatCard title={t('userDetail.inventory.itemsRemoved')} value={lifetimeAdj.removed} hint={t('userDetail.inventory.unitsRemovedHint')} color="rose" />
+                            </div>
+                        ) : (
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                <StatCard title={t('userDetail.general.salesOrdersCreated')} value={lifetime.salesCount} hint={t('userDetail.general.allTime')} color="teal" />
+                                <StatCard title={t('userDetail.general.salesValue')} value={formatMoney(lifetime.salesRevenue)} hint={t('userDetail.general.exclCancelled')} color="teal" />
+                                <StatCard title={t('userDetail.general.purchaseOrdersCreated')} value={lifetime.purchaseCount} hint={t('userDetail.general.allTime')} color="amber" />
+                                <StatCard title={t('userDetail.general.purchaseValue')} value={formatMoney(lifetime.purchaseSpend)} hint={t('userDetail.general.exclCancelled')} color="amber" />
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -309,6 +367,12 @@ export default function UserDetailPage() {
                                 }
                             />
                             <Fact label={t('userDetail.settings.status')} value={<StatusBadge status={user.archived ? 'ARCHIVED' : 'ACTIVE'} />} />
+                            {isRestrictable && (
+                                <Fact
+                                    label={t('userDetail.settings.canSeePrices')}
+                                    value={user.canSeePrices !== false ? t('common.yes') : t('common.no')}
+                                />
+                            )}
                         </dl>
                         {isAdmin && !isOwner && !isSelf && (
                             <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
@@ -332,6 +396,45 @@ export default function UserDetailPage() {
                             </p>
                         )}
                     </div>
+
+                    {/* Warehouse assignment (WAREHOUSE role only) */}
+                    {isWarehouse && isAdmin && (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <h2 className="text-lg font-semibold">{t('userDetail.settings.warehouseAssignment')}</h2>
+                                <button
+                                    type="button"
+                                    onClick={handleSaveWarehouses}
+                                    disabled={savingWarehouses}
+                                    className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-60"
+                                >
+                                    {savingWarehouses ? t('common.saving') : t('common.save')}
+                                </button>
+                            </div>
+                            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                                {t('userDetail.settings.warehouseAssignmentHint')}
+                            </p>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                                {allWarehouses.map((w) => {
+                                    const checked = assignedWarehouseIds.includes(w.id)
+                                    return (
+                                        <label key={w.id} className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm transition ${checked ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300' : 'border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-300'}`}>
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={(e) => setAssignedWarehouseIds((prev) => e.target.checked ? [...prev, w.id] : prev.filter((x) => x !== w.id))}
+                                                className="h-3.5 w-3.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                            />
+                                            {w.name}
+                                        </label>
+                                    )
+                                })}
+                                {allWarehouses.length === 0 && (
+                                    <p className="text-sm text-slate-400">{t('common.loading')}</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     {/* User rights */}
                     <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
@@ -363,6 +466,12 @@ export default function UserDetailPage() {
                             <p className="mt-4 py-6 text-center text-sm text-slate-500">{t('userDetail.settings.loadingPermissions')}</p>
                         ) : (
                             <>
+                                {isWarehouse && (
+                                    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+                                        <p className="font-medium">{t('userDetail.settings.warehouseTitle')}</p>
+                                        <p className="mt-1 text-emerald-700 dark:text-emerald-300/90">{t('userDetail.settings.warehouseNote')}</p>
+                                    </div>
+                                )}
                                 <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
                                     {t('userDetail.settings.rightsIntro')}
                                 </p>
@@ -431,39 +540,63 @@ export default function UserDetailPage() {
                         </div>
                     </div>
 
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        <StatCard title={t('userDetail.performance.salesValue')} value={formatMoney(summary.salesRevenue)} hint={t('userDetail.performance.salesOrdersHint', { count: summary.salesCount })} color="teal" />
-                        <StatCard title={t('userDetail.performance.salesOrders')} value={summary.salesCount} hint={t('common.inSelectedPeriod')} color="teal" />
-                        <StatCard title={t('userDetail.performance.avgSalesOrder')} value={formatMoney(summary.avgSalesValue)} hint={t('userDetail.performance.perSalesOrder')} color="blue" />
-                        <StatCard title={t('userDetail.performance.purchaseValue')} value={formatMoney(summary.purchaseSpend)} hint={t('userDetail.performance.purchaseOrdersHint', { count: summary.purchaseCount })} color="amber" />
-                        <StatCard title={t('userDetail.performance.purchaseOrders')} value={summary.purchaseCount} hint={t('common.inSelectedPeriod')} color="amber" />
-                    </div>
+                    {isWarehouse ? (
+                        <>
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                <StatCard title={t('userDetail.inventory.adjustments')} value={adjSummary.count} hint={t('common.inSelectedPeriod')} color="blue" />
+                                <StatCard title={t('userDetail.inventory.itemsAdded')} value={adjSummary.added} hint={t('userDetail.inventory.unitsAddedHint')} color="teal" />
+                                <StatCard title={t('userDetail.inventory.itemsRemoved')} value={adjSummary.removed} hint={t('userDetail.inventory.unitsRemovedHint')} color="rose" />
+                            </div>
 
-                    <TrendChart data={monthly} metrics={CHART_METRICS} initialMetric="salesAmount" />
+                            <section className="space-y-3">
+                                <h2 className="text-lg font-semibold">{t('userDetail.inventory.tableTitle', { count: filteredAdjustments.length })}</h2>
+                                <DataTable
+                                    tableId="user-inventory-adjustments"
+                                    columns={adjustmentColumns(t)}
+                                    rows={filteredAdjustments.map((a, i) => ({ ...a, _rid: `a-${a.id}-${i}` }))}
+                                    getRowId={(r) => r._rid}
+                                    onRowClick={(r) => r.productId && navigate(`/products/${r.productId}`)}
+                                    initialPageSize={10}
+                                />
+                            </section>
+                        </>
+                    ) : (
+                        <>
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                <StatCard title={t('userDetail.performance.salesValue')} value={formatMoney(summary.salesRevenue)} hint={t('userDetail.performance.salesOrdersHint', { count: summary.salesCount })} color="teal" />
+                                <StatCard title={t('userDetail.performance.salesOrders')} value={summary.salesCount} hint={t('common.inSelectedPeriod')} color="teal" />
+                                <StatCard title={t('userDetail.performance.avgSalesOrder')} value={formatMoney(summary.avgSalesValue)} hint={t('userDetail.performance.perSalesOrder')} color="blue" />
+                                <StatCard title={t('userDetail.performance.purchaseValue')} value={formatMoney(summary.purchaseSpend)} hint={t('userDetail.performance.purchaseOrdersHint', { count: summary.purchaseCount })} color="amber" />
+                                <StatCard title={t('userDetail.performance.purchaseOrders')} value={summary.purchaseCount} hint={t('common.inSelectedPeriod')} color="amber" />
+                            </div>
 
-                    <section className="space-y-3">
-                        <h2 className="text-lg font-semibold">{t('userDetail.performance.salesOrdersTable', { count: salesRows.length })}</h2>
-                        <DataTable
-                            tableId="user-sales-orders"
-                            columns={orderColumns(t, t('userDetail.cols.client'))}
-                            rows={salesRows}
-                            getRowId={(r) => r._rid}
-                            onRowClick={(r) => navigate(`/sales-orders/${r.orderId}`)}
-                            initialPageSize={10}
-                        />
-                    </section>
+                            <TrendChart data={monthly} metrics={CHART_METRICS} initialMetric="salesAmount" />
 
-                    <section className="space-y-3">
-                        <h2 className="text-lg font-semibold">{t('userDetail.performance.purchaseOrdersTable', { count: purchaseRows.length })}</h2>
-                        <DataTable
-                            tableId="user-purchase-orders"
-                            columns={orderColumns(t, t('userDetail.cols.manufacturer'))}
-                            rows={purchaseRows}
-                            getRowId={(r) => r._rid}
-                            onRowClick={(r) => navigate(`/purchase-orders/${r.orderId}`)}
-                            initialPageSize={10}
-                        />
-                    </section>
+                            <section className="space-y-3">
+                                <h2 className="text-lg font-semibold">{t('userDetail.performance.salesOrdersTable', { count: salesRows.length })}</h2>
+                                <DataTable
+                                    tableId="user-sales-orders"
+                                    columns={orderColumns(t, t('userDetail.cols.client'))}
+                                    rows={salesRows}
+                                    getRowId={(r) => r._rid}
+                                    onRowClick={(r) => navigate(`/sales-orders/${r.orderId}`)}
+                                    initialPageSize={10}
+                                />
+                            </section>
+
+                            <section className="space-y-3">
+                                <h2 className="text-lg font-semibold">{t('userDetail.performance.purchaseOrdersTable', { count: purchaseRows.length })}</h2>
+                                <DataTable
+                                    tableId="user-purchase-orders"
+                                    columns={orderColumns(t, t('userDetail.cols.manufacturer'))}
+                                    rows={purchaseRows}
+                                    getRowId={(r) => r._rid}
+                                    onRowClick={(r) => navigate(`/purchase-orders/${r.orderId}`)}
+                                    initialPageSize={10}
+                                />
+                            </section>
+                        </>
+                    )}
                 </div>
             )}
         </div>
@@ -479,6 +612,25 @@ const orderColumns = (t, counterpartyLabel) => [
     { key: 'totalAmount', label: t('common.total'), render: (r) => formatMoney(r.totalAmount) },
 ]
 
+const adjustmentColumns = (t) => [
+    { key: 'createdAt', label: t('common.date'), render: (r) => formatDate(r.createdAt) },
+    { key: 'productName', label: t('userDetail.inventory.product'), render: (r) => r.productName || '—' },
+    {
+        key: 'quantityChange',
+        label: t('userDetail.inventory.change'),
+        render: (r) => {
+            const added = (r.quantityChange ?? 0) >= 0
+            return (
+                <span className={added ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-rose-600 dark:text-rose-400'}>
+                    {added ? '+' : ''}{r.quantityChange}
+                </span>
+            )
+        },
+    },
+    { key: 'newQuantity', label: t('userDetail.inventory.resulting') },
+    { key: 'note', label: t('userDetail.inventory.reason'), render: (r) => r.note || '—' },
+]
+
 function BackButton({ onClick, label }) {
     return (
         <button
@@ -490,11 +642,18 @@ function BackButton({ onClick, label }) {
     )
 }
 
-function Fact({ label, value }) {
+function Fact({ label, value, copyValue }) {
     return (
         <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            {copyValue ? (
+                <dd className="mt-1 flex items-center gap-1.5 text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <span className="min-w-0 truncate">{value}</span>
+                    <CopyButton value={copyValue} />
+                </dd>
+            ) : (
+                <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            )}
         </div>
     )
 }

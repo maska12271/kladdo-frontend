@@ -8,6 +8,8 @@ import StatusBadge from '../components/StatusBadge'
 import DataTable from '../components/DataTable'
 import LoadingBlock from '../components/LoadingBlock'
 import TrendChart from '../components/TrendChart'
+import CopyButton from '../components/CopyButton'
+import CategoryChips from '../components/CategoryChips'
 import { usePermissions } from '../context/AuthContext'
 import { formatMoney, formatDate } from '../utils/format'
 import { PERIOD_KEYS, periodRange } from '../utils/period'
@@ -100,10 +102,11 @@ export default function ManufacturerDetailPage() {
             <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-5 md:grid-cols-3">
                     <Fact label={t('common.country')} value={manufacturer.country || '—'} />
-                    <Fact label={t('common.email')} value={manufacturer.email || '—'} />
-                    <Fact label={t('common.phone')} value={manufacturer.phone || '—'} />
+                    <Fact label={t('common.email')} value={manufacturer.email || '—'} copyValue={manufacturer.email} />
+                    <Fact label={t('common.phone')} value={manufacturer.phone || '—'} copyValue={manufacturer.phone} />
                     <Fact
                         label={t('common.website')}
+                        copyValue={manufacturer.website}
                         value={
                             manufacturer.website ? (
                                 <a href={manufacturer.website} target="_blank" rel="noreferrer" className="text-teal-600 hover:underline dark:text-teal-400">
@@ -115,6 +118,7 @@ export default function ManufacturerDetailPage() {
                         }
                     />
                     <Fact label={t('common.address')} value={manufacturer.address || '—'} />
+                    <Fact label={t('partnerCategories.label')} value={<CategoryChips categories={manufacturer.categories} />} />
                     <Fact label={t('manufacturerDetail.facts.productsInCatalogue')} value={details?.catalogProductCount ?? 0} />
                 </dl>
                 {manufacturer.notes && (
@@ -216,11 +220,18 @@ function BackButton({ onClick, label }) {
     )
 }
 
-function Fact({ label, value }) {
+function Fact({ label, value, copyValue }) {
     return (
         <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            {copyValue ? (
+                <dd className="mt-1 flex items-center gap-1.5 text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    <span className="min-w-0 truncate">{value}</span>
+                    <CopyButton value={copyValue} />
+                </dd>
+            ) : (
+                <dd className="mt-1 text-lg font-semibold text-slate-800 dark:text-slate-100">{value}</dd>
+            )}
         </div>
     )
 }

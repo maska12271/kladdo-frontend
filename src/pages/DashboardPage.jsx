@@ -1,7 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Check, Plus, SlidersHorizontal, X } from 'lucide-react'
+import {
+    Check,
+    Plus,
+    SlidersHorizontal,
+    X,
+    TrendingUp,
+    TrendingDown,
+    ShoppingCart,
+    Truck,
+    FileText,
+    AlertTriangle,
+    Wallet,
+} from 'lucide-react'
 import { apiGet } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
@@ -10,8 +22,9 @@ import DataTable from '../components/DataTable'
 import StatusBadge from '../components/StatusBadge'
 import LoadingBlock from '../components/LoadingBlock'
 import RevenueSpendChart from '../components/RevenueSpendChart'
-import { ActivityFeed, RankList } from '../components/DashboardWidgets'
+import { ActivityFeed, RankList, ExpiringLots, Receivables } from '../components/DashboardWidgets'
 import DashboardGrid from '../components/DashboardGrid'
+import WarehouseDashboard from '../components/WarehouseDashboard'
 import { useDashboardLayout, resolveLayout, widgetMeta } from '../hooks/useDashboardLayout'
 import { compact, bottom } from '../utils/gridLayout'
 import { formatMoney } from '../utils/format'
@@ -54,10 +67,12 @@ export default function DashboardPage() {
         if (!stats) return keys
         const hasSales = !!stats.sales
         const hasPurchases = !!stats.purchases
-        if (hasSales || hasPurchases || stats.products || stats.tenders) keys.add('kpis')
+        if (hasSales || hasPurchases || stats.products || stats.tenders || stats.collected) keys.add('kpis')
         if (hasSales || hasPurchases) keys.add('revenueChart')
         if (hasSales || hasPurchases || stats.tenders) keys.add('activity')
         if (stats.products) keys.add('lowStock')
+        if (stats.receivables) keys.add('receivables')
+        if (stats.expiry) keys.add('expiringLots')
         if (stats.tenders) keys.add('tenders')
         if (hasSales) keys.add('topClients')
         if (hasSales) keys.add('topProducts')
@@ -98,6 +113,16 @@ export default function DashboardPage() {
 
     if (loading) return <LoadingBlock text={t('dashboard.loading')} />
 
+    // Warehouse staff get a dedicated operational dashboard (no revenue/value figures).
+    if (user?.role === 'WAREHOUSE') {
+        return (
+            <div className="space-y-6">
+                <PageHeader title={t('dashboard.title')} description={t('warehouseDash.desc')} />
+                {!stats ? <LoadingBlock text={t('dashboard.noData')} /> : <WarehouseDashboard stats={stats} />}
+            </div>
+        )
+    }
+
     const titleOf = (key) => {
         switch (key) {
             case 'kpis':
@@ -108,6 +133,10 @@ export default function DashboardPage() {
                 return t('dashboard.titles.activity')
             case 'lowStock':
                 return t('dashboard.titles.lowStock', { count: stats?.products?.lowStockCount ?? 0 })
+            case 'receivables':
+                return t('dashboard.titles.receivables', { count: stats?.receivables?.overdueCount ?? 0 })
+            case 'expiringLots':
+                return t('dashboard.titles.expiringLots', { count: stats?.expiry?.expiredCount ?? 0 })
             case 'tenders':
                 return t('dashboard.titles.tenders')
             case 'topClients':
@@ -139,6 +168,10 @@ export default function DashboardPage() {
                         paginate={false}
                     />
                 )
+            case 'receivables':
+                return <Receivables data={stats.receivables} onNavigate={editing ? undefined : navigate} />
+            case 'expiringLots':
+                return <ExpiringLots rows={stats.expiry?.rows || []} onNavigate={editing ? undefined : navigate} />
             case 'tenders':
                 return (
                     <DataTable
@@ -269,6 +302,7 @@ function KpiCards({ stats }) {
             <StatCard
                 key="revenue"
                 compact
+                icon={TrendingUp}
                 title={t('dashboard.kpi.revenueThisMonth')}
                 value={formatMoney(stats.sales.thisMonth)}
                 hint={t('dashboard.kpi.vsLastMonth')}
@@ -282,6 +316,7 @@ function KpiCards({ stats }) {
             <StatCard
                 key="spend"
                 compact
+                icon={TrendingDown}
                 title={t('dashboard.kpi.spendThisMonth')}
                 value={formatMoney(stats.purchases.thisMonth)}
                 hint={t('dashboard.kpi.vsLastMonth')}
@@ -290,17 +325,31 @@ function KpiCards({ stats }) {
             />,
         )
     }
+    if (stats.collected) {
+        cards.push(
+            <StatCard
+                key="collected"
+                compact
+                icon={Wallet}
+                title={t('dashboard.kpi.collectedThisMonth')}
+                value={formatMoney(stats.collected.thisMonth)}
+                hint={t('dashboard.kpi.fromInvoicePayments')}
+                color="emerald"
+                trend={{ pct: pctChange(stats.collected.thisMonth, stats.collected.lastMonth), good: true }}
+            />,
+        )
+    }
     if (stats.sales) {
-        cards.push(<StatCard key="active-sales" compact title={t('dashboard.kpi.activeSales')} value={stats.sales.activeCount} hint={t('dashboard.kpi.inProgress')} color="teal" />)
+        cards.push(<StatCard key="active-sales" compact icon={ShoppingCart} title={t('dashboard.kpi.activeSales')} value={stats.sales.activeCount} hint={t('dashboard.kpi.inProgress')} color="teal" />)
     }
     if (stats.purchases) {
-        cards.push(<StatCard key="active-purchases" compact title={t('dashboard.kpi.activePurchases')} value={stats.purchases.activeCount} hint={t('dashboard.kpi.inProgress')} color="blue" />)
+        cards.push(<StatCard key="active-purchases" compact icon={Truck} title={t('dashboard.kpi.activePurchases')} value={stats.purchases.activeCount} hint={t('dashboard.kpi.inProgress')} color="blue" />)
     }
     if (stats.tenders) {
-        cards.push(<StatCard key="tenders" compact title={t('dashboard.kpi.activeTenders')} value={stats.tenders.activeCount} hint={t('dashboard.kpi.openOrInProgress')} color="blue" />)
+        cards.push(<StatCard key="tenders" compact icon={FileText} title={t('dashboard.kpi.activeTenders')} value={stats.tenders.activeCount} hint={t('dashboard.kpi.openOrInProgress')} color="blue" />)
     }
     if (stats.products) {
-        cards.push(<StatCard key="low-stock" compact title={t('dashboard.kpi.lowStockItems')} value={stats.products.lowStockCount} hint={t('dashboard.kpi.belowMinimum')} color="rose" />)
+        cards.push(<StatCard key="low-stock" compact icon={AlertTriangle} title={t('dashboard.kpi.lowStockItems')} value={stats.products.lowStockCount} hint={t('dashboard.kpi.belowMinimum')} color="rose" />)
     }
 
     // auto-fit columns adapt to the widget's actual width (not the viewport), so cards stay readable

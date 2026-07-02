@@ -111,7 +111,7 @@ export default function ImportModal({
                 await apiPost(endpoint, validRows[i].payload, { suppressErrorToast: true })
                 created++
             } catch (err) {
-                failed.push({ rowNumber: validRows[i].rowNumber, message: err.message || 'Failed' })
+                failed.push({ rowNumber: validRows[i].rowNumber, message: err.message || t('importModal.failed') })
             }
             setProgress({ done: i + 1, total: validRows.length })
         }

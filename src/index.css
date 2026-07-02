@@ -1,20 +1,226 @@
-@import "tailwindcss";
+ @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-:root {
-  color-scheme: light;
+/* ============================================================
+   THEME WIRING — do not edit.
+   Routes Tailwind's `teal` (brand/accent) and `slate` (neutral)
+   utility classes through the CSS variables defined in the
+   PALETTE section below, so the whole app can be recolored from
+   one place, independently per light/dark theme.
+   Every existing `*-teal-*` / `*-slate-*` class keeps working.
+   ============================================================ */
+@theme inline {
+  --color-teal-50: var(--brand-50);
+  --color-teal-100: var(--brand-100);
+  --color-teal-200: var(--brand-200);
+  --color-teal-300: var(--brand-300);
+  --color-teal-400: var(--brand-400);
+  --color-teal-500: var(--brand-500);
+  --color-teal-600: var(--brand-600);
+  --color-teal-700: var(--brand-700);
+  --color-teal-800: var(--brand-800);
+  --color-teal-900: var(--brand-900);
+  --color-teal-950: var(--brand-950);
+
+  --color-slate-50: var(--neutral-50);
+  --color-slate-100: var(--neutral-100);
+  --color-slate-200: var(--neutral-200);
+  --color-slate-300: var(--neutral-300);
+  --color-slate-400: var(--neutral-400);
+  --color-slate-500: var(--neutral-500);
+  --color-slate-600: var(--neutral-600);
+  --color-slate-700: var(--neutral-700);
+  --color-slate-800: var(--neutral-800);
+  --color-slate-900: var(--neutral-900);
+  --color-slate-950: var(--neutral-950);
+
+  --color-rose-50: var(--danger-50);
+  --color-rose-100: var(--danger-100);
+  --color-rose-200: var(--danger-200);
+  --color-rose-300: var(--danger-300);
+  --color-rose-400: var(--danger-400);
+  --color-rose-500: var(--danger-500);
+  --color-rose-600: var(--danger-600);
+  --color-rose-700: var(--danger-700);
+  --color-rose-800: var(--danger-800);
+  --color-rose-900: var(--danger-900);
+  --color-rose-950: var(--danger-950);
+
+  --color-secondary-50: var(--secondary-50);
+  --color-secondary-100: var(--secondary-100);
+  --color-secondary-200: var(--secondary-200);
+  --color-secondary-300: var(--secondary-300);
+  --color-secondary-400: var(--secondary-400);
+  --color-secondary-500: var(--secondary-500);
+  --color-secondary-600: var(--secondary-600);
+  --color-secondary-700: var(--secondary-700);
+  --color-secondary-800: var(--secondary-800);
+  --color-secondary-900: var(--secondary-900);
+  --color-secondary-950: var(--secondary-950);
 }
 
-html.dark {
+/* ============================================================
+   PALETTE — EDIT HERE to recolor the app.
+   `brand`   = primary accent: buttons, links, active nav, focus rings, logo.
+   `neutral` = grays: text, borders, page/card surfaces.
+   Shades run 50 (lightest) → 950 (darkest), like Tailwind.
+   :root      = LIGHT theme.
+   .dark      = DARK theme  (defaults match light; change freely).
+   Tip: the app picks darker shades in light mode and lighter
+   shades in dark mode, so a single hue per ramp usually looks
+   right in both themes — but you can diverge the .dark block.
+   Defaults below reproduce the original teal + slate look.
+   ============================================================ */
+:root {
+  color-scheme: light;
+
+  /* BRAND — light (blue; runs through your light primary #224c6d at 800) */
+  --brand-50: #eef4fa;
+  --brand-100: #d9e7f3;
+  --brand-200: #bcd6ea;
+  --brand-300: #92bddd;
+  --brand-400: #6aa0cd;
+  --brand-500: #4781b4;
+  --brand-600: #336897;
+  --brand-700: #295978;
+  --brand-800: #224c6d;
+  --brand-900: #1b3b54;
+  --brand-950: #112638;
+
+  /* NEUTRAL — light (blue-gray; bg #f0f5f9 at 100, text #090e11 at 900) */
+  --neutral-50: #f7fafc;
+  --neutral-100: #f0f5f9;
+  --neutral-200: #e1e9f0;
+  --neutral-300: #cbd7e1;
+  --neutral-400: #9fb0bf;
+  --neutral-500: #6f818f;
+  --neutral-600: #4e5e6a;
+  --neutral-700: #36434d;
+  --neutral-800: #1f2a31;
+  --neutral-900: #090e11;
+  --neutral-950: #050809;
+
+  /* DANGER — fixed red for errors/destructive actions (kept red; your palette accent is blue) */
+  --danger-50: #fef2f1;
+  --danger-100: #fde1df;
+  --danger-200: #fac6c3;
+  --danger-300: #f59a95;
+  --danger-400: #ef443e;
+  --danger-500: #d62820;
+  --danger-600: #c11610;
+  --danger-700: #a01209;
+  --danger-800: #830f0a;
+  --danger-900: #6b120f;
+  --danger-950: #3c0906;
+
+  /* SECONDARY — your blue #7bb4e0 (at 300) / #1f5884 (at 700); chart/data accent */
+  --secondary-50: #eef5fb;
+  --secondary-100: #d9e9f5;
+  --secondary-200: #bcd8ec;
+  --secondary-300: #7bb4e0;
+  --secondary-400: #5096cd;
+  --secondary-500: #2f7cb6;
+  --secondary-600: #226699;
+  --secondary-700: #1f5884;
+  --secondary-800: #1a4668;
+  --secondary-900: #163850;
+  --secondary-950: #0d2233;
+}
+
+.dark {
   color-scheme: dark;
+
+  /* BRAND — dark (same blue ramp; dark link tone #92bddd lands at 300) */
+  --brand-50: #eef4fa;
+  --brand-100: #d9e7f3;
+  --brand-200: #bcd6ea;
+  --brand-300: #92bddd;
+  --brand-400: #6aa0cd;
+  --brand-500: #4781b4;
+  --brand-600: #336897;
+  --brand-700: #295978;
+  --brand-800: #224c6d;
+  --brand-900: #1b3b54;
+  --brand-950: #112638;
+
+  /* NEUTRAL — dark (blue-gray; text #eef3f6 at 100, bg #060b0f at 950) */
+  --neutral-50: #f6f9fb;
+  --neutral-100: #eef3f6;
+  --neutral-200: #d2dde4;
+  --neutral-300: #aebdc8;
+  --neutral-400: #7e8e9b;
+  --neutral-500: #5a6873;
+  --neutral-600: #404c55;
+  --neutral-700: #2a343c;
+  --neutral-800: #182027;
+  --neutral-900: #0e151a;
+  --neutral-950: #060b0f;
+
+  /* DANGER — same fixed red ramp (errors stay red regardless of palette) */
+  --danger-50: #fef2f1;
+  --danger-100: #fde1df;
+  --danger-200: #fac6c3;
+  --danger-300: #f59a95;
+  --danger-400: #ef443e;
+  --danger-500: #d62820;
+  --danger-600: #c11610;
+  --danger-700: #a01209;
+  --danger-800: #830f0a;
+  --danger-900: #6b120f;
+  --danger-950: #3c0906;
+
+  /* SECONDARY — same blue ramp */
+  --secondary-50: #eef5fb;
+  --secondary-100: #d9e9f5;
+  --secondary-200: #bcd8ec;
+  --secondary-300: #7bb4e0;
+  --secondary-400: #5096cd;
+  --secondary-500: #2f7cb6;
+  --secondary-600: #226699;
+  --secondary-700: #1f5884;
+  --secondary-800: #1a4668;
+  --secondary-900: #163850;
+  --secondary-950: #0d2233;
+}
+
+/* ============================================================
+   ELEVATION — theme-aware shadow scale.
+   Tailwind's default shadows are tuned for white and read as
+   near-invisible on dark surfaces, so we drive depth from tokens
+   and bump the alpha in dark mode.
+   ============================================================ */
+:root {
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 14px -3px rgba(15, 23, 42, 0.10), 0 2px 6px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 18px 40px -12px rgba(15, 23, 42, 0.20), 0 8px 16px -8px rgba(15, 23, 42, 0.10);
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--brand-500) 30%, transparent);
+}
+
+.dark {
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 1px 3px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 6px 18px -4px rgba(0, 0, 0, 0.55), 0 2px 8px -2px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.70), 0 10px 20px -8px rgba(0, 0, 0, 0.50);
 }
 
 body {
   margin: 0;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background: #f1f5f9;
-  color: #0f172a;
+  /* Subtle vertical wash gives the page quiet depth without tinting content. */
+  background-color: var(--neutral-100);
+  background-image: linear-gradient(180deg, var(--neutral-50) 0%, var(--neutral-100) 38%);
+  background-attachment: fixed;
+  color: var(--neutral-900);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.dark body {
+  background-color: var(--neutral-950);
+  background-image: linear-gradient(180deg, var(--neutral-900) 0%, var(--neutral-950) 42%);
+  color: var(--neutral-100);
 }
 
 #root {
@@ -32,20 +238,118 @@ textarea {
   font: inherit;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* ============================================================
+   INTERACTION POLISH (app-wide, low specificity).
+   `:where()` keeps these at specificity 0 so any component-level
+   Tailwind utility (transition-*, focus:*, etc.) still overrides.
+   This fills the gaps where components specified no motion/focus.
+   ============================================================ */
+
+/* Fill in smooth transitions wherever a component didn't set its own. */
+:where(a, button, [role="button"], summary, label, input, select, textarea) {
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.12s ease;
+}
+
+/* Accessible keyboard-focus ring (mouse focus is left untouched). */
+:where(a, button, [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+/* Every text input / select / textarea gets a proper focus ring app-wide. */
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: var(--ring-focus);
+}
+
+/* Subtle press feedback on real buttons (transform = no reflow). */
+button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* ============================================================
+   REUSABLE SURFACE / MOTION HELPERS
+   ============================================================ */
+.shadow-card {
+  box-shadow: var(--shadow-sm);
+}
+
+.shadow-card-md {
+  box-shadow: var(--shadow-md);
+}
+
+.shadow-pop {
+  box-shadow: var(--shadow-lg);
+}
+
+/* Gentle hover lift for clickable cards / tiles. */
+.lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .lift:hover {
+    transform: none;
+  }
+}
+
+/* ============================================================
+   SCROLLBARS — slim, theme-aware, brighten on hover.
+   ============================================================ */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.45);
+  background: color-mix(in srgb, var(--neutral-400) 60%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
   border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-400);
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--neutral-400) 60%, transparent) transparent;
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -59,4 +363,47 @@ textarea {
 
 .toast-enter {
   animation: toast-in 0.18s ease-out;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.overlay-enter {
+  animation: overlay-in 0.18s ease-out;
+}
+
+.dialog-enter {
+  animation: dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fade-in-up 0.3s ease-out both;
 }

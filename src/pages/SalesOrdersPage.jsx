@@ -6,18 +6,20 @@ import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
 import DataTable from '../components/DataTable'
 import DataToolbar from '../components/DataToolbar'
-import StatusBadge from '../components/StatusBadge'
 import StatusPicker from '../components/StatusPicker'
+import StatusBadge from '../components/StatusBadge'
 import ActionMenu from '../components/ActionMenu'
 import Modal from '../components/Modal'
 import ConfirmModal from '../components/ConfirmModal'
 import { useModal } from '../hooks/useModal'
 import { useQuickCreate } from '../hooks/useQuickCreate'
-import { usePermissions } from '../context/AuthContext'
+import { useAuth, usePermissions } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
 import QuickCreateModal from '../components/QuickCreateModal'
 import { useToast } from '../context/ToastContext'
 import { formatDate, formatMoney, safeArray } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
+import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
 import { Pencil, Trash2 } from 'lucide-react'
 
 const exportColumns = [
@@ -37,28 +39,50 @@ const exportColumns = [
     { header: 'Notes', value: (r) => r.notes },
 ]
 
+const todayStr = () => new Date().toISOString().slice(0, 10)
+
+// Amount-due figures on the payment column carry the invoice's own currency snapshot.
+function paymentMoney(value, currency) {
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currency || 'EUR',
+        minimumFractionDigits: 2,
+    }).format(Number(value || 0))
+}
+
+const PAYMENT_STATUSES = [
+    'NOT_INVOICED',
+    'PREPAYMENT_PENDING',
+    'PREPAYMENT_OVERDUE',
+    'AWAITING_FINAL',
+    'INVOICED',
+    'OVERDUE',
+    'PAID',
+]
+
+const NO_PAYMENT = { paymentStatus: 'NOT_INVOICED', amountDue: 0, penaltyAmount: 0, overdue: false, currency: null }
+
+const emptyItem = { productId: '', quantity: 1, unitPrice: 0, discountPercent: '', taxRatePercent: '' }
+
 const emptyForm = {
     clientId: '',
-    tenderId: '',
+    warehouseId: '',
     orderNumber: '',
     status: 'NEW',
-    orderDate: '',
+    orderDate: todayStr(),
     closingDate: '',
     deliveryAddress: '',
     notes: '',
     deliveryPrice: 0,
-    items: [
-        {
-            productId: '',
-            quantity: 1,
-            unitPrice: 0,
-        },
-    ],
+    items: [{ ...emptyItem }],
 }
 
 export default function SalesOrdersPage() {
     const { t } = useTranslation()
     const { canCreate, canEdit, canDelete } = usePermissions('SALES_ORDERS')
+    const invoicePerms = usePermissions('INVOICES')
+    const { canSeePrices } = useAuth()
+    const { defaultWarehouseId } = useSettings()
     const navigate = useNavigate()
     const toast = useToast()
     const { quickCreate, openQuickCreate, closeQuickCreate, handleQuickCreated } = useQuickCreate()
@@ -69,34 +93,93 @@ export default function SalesOrdersPage() {
     const [rows, setRows] = useState([])
     const [clients, setClients] = useState([])
     const [products, setProducts] = useState([])
-    const [tenders, setTenders] = useState([])
+    const [warehouses, setWarehouses] = useState([])
+    const [taxRates, setTaxRates] = useState([])
     const [form, setForm] = useState(emptyForm)
     const [editingId, setEditingId] = useState(null)
+    const [suggestedOrderNumber, setSuggestedOrderNumber] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState([])
     const [clientFilter, setClientFilter] = useState([])
+    const [paymentStatusFilter, setPaymentStatusFilter] = useState([])
+    // orderId -> derived billing summary (payment status, amount due, penalty). Orders absent from the
+    // map are treated as NOT_INVOICED.
+    const [paymentByOrder, setPaymentByOrder] = useState({})
     const [loading, setLoading] = useState(false)
     const [statusLoading, setStatusLoading] = useState({})
+    // productId -> on-hand quantity in the currently selected warehouse (for availability hints).
+    const [stockLevels, setStockLevels] = useState({})
+    // Form-level validation message shown in the modal when submit is blocked.
+    const [formError, setFormError] = useState('')
+    // When editing an order that already shipped, its own units were already drawn from the warehouse,
+    // so they must be added back to the "available" pool to validate its quantities fairly.
+    const [editBaseline, setEditBaseline] = useState(null)
 
     useEffect(() => {
         loadData()
     }, [])
 
+    // Clear the validation banner as soon as the user edits the form again.
+    useEffect(() => {
+        setFormError('')
+    }, [form])
+
+    // Pick a sensible warehouse for a new order: the company default if it still exists, else the only
+    // warehouse when there is just one, else leave it for the user to choose.
+    const pickDefaultWarehouse = () => {
+        if (defaultWarehouseId && warehouses.some((w) => String(w.id) === String(defaultWarehouseId))) {
+            return String(defaultWarehouseId)
+        }
+        return warehouses.length === 1 ? String(warehouses[0].id) : ''
+    }
+
+    // Load per-product stock for the chosen warehouse whenever it changes while the form is open.
+    useEffect(() => {
+        if (!formModal.isOpen || !form.warehouseId) {
+            setStockLevels({})
+            return
+        }
+        let cancelled = false
+        apiGet(`/warehouses/${form.warehouseId}/stock-levels`)
+            .then((res) => !cancelled && setStockLevels(res && typeof res === 'object' ? res : {}))
+            .catch(() => !cancelled && setStockLevels({}))
+        return () => {
+            cancelled = true
+        }
+    }, [form.warehouseId, formModal.isOpen])
+
     const loadData = async () => {
-        const [ordersRes, clientsRes, productsRes, tendersRes] = await Promise.all([
+        const [ordersRes, clientsRes, productsRes, warehousesRes, taxRes] = await Promise.all([
             apiGet('/sales-orders?page=0&size=500&sortBy=id&sortDir=desc'),
             apiGet('/clients?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/products?page=0&size=500&sortBy=id&sortDir=asc'),
-            apiGet('/tenders?page=0&size=500&sortBy=id&sortDir=asc'),
+            apiGet('/warehouses'),
+            apiGet('/settings/tax-rates'),
         ])
 
         setRows(safeArray(ordersRes))
         setClients(safeArray(clientsRes))
         setProducts(safeArray(productsRes))
-        setTenders(safeArray(tendersRes))
+        setWarehouses(safeArray(warehousesRes))
+        setTaxRates(Array.isArray(taxRes) ? taxRes : [])
+
+        // Billing summaries drive the payment column and filter; only fetched when the user can see
+        // invoices, so orders stay usable for staff without invoice access.
+        if (invoicePerms.canView) {
+            try {
+                const summaries = await apiGet('/sales-orders/payment-summaries')
+                const map = {}
+                for (const s of safeArray(summaries)) map[s.orderId] = s
+                setPaymentByOrder(map)
+            } catch {
+                setPaymentByOrder({})
+            }
+        }
     }
+
+    const paymentFor = (row) => paymentByOrder[row.id] || NO_PAYMENT
 
     const filteredRows = useMemo(() => {
         return rows.filter((row) => {
@@ -109,22 +192,76 @@ export default function SalesOrdersPage() {
 
             const matchesStatus = statusFilter.length === 0 || statusFilter.includes(row.status)
             const matchesClient = clientFilter.length === 0 || clientFilter.includes(String(row.client?.id))
+            const matchesPayment =
+                paymentStatusFilter.length === 0 ||
+                paymentStatusFilter.includes((paymentByOrder[row.id] || NO_PAYMENT).paymentStatus)
 
-            return matchesSearch && matchesStatus && matchesClient
+            return matchesSearch && matchesStatus && matchesClient && matchesPayment
         })
-    }, [rows, search, statusFilter, clientFilter])
+    }, [rows, search, statusFilter, clientFilter, paymentStatusFilter, paymentByOrder])
 
-    const openCreate = () => {
+    // Active tax rates as picker options; the value is the percentage (snapshotted onto the line).
+    const taxOptions = useMemo(() => {
+        const active = taxRates.filter((r) => r.active !== false)
+        return [
+            { value: '', label: t('salesOrders.form.noTax') },
+            ...active.map((r) => ({ value: String(Number(r.percentage)), label: `${r.name} (${Number(r.percentage)}%)` })),
+        ]
+    }, [taxRates, t])
+
+    const defaultTaxValue = useMemo(() => {
+        const def = taxRates.find((r) => r.isDefault)
+        return def ? String(Number(def.percentage)) : ''
+    }, [taxRates])
+
+    // Live totals: subtotal (net, after discounts), tax, and totals with/without tax.
+    const totals = useMemo(() => {
+        let subtotal = 0
+        let tax = 0
+        for (const it of form.items) {
+            const net = (Number(it.unitPrice) || 0) * (Number(it.quantity) || 0) * (1 - (Number(it.discountPercent) || 0) / 100)
+            subtotal += net
+            tax += net * ((Number(it.taxRatePercent) || 0) / 100)
+        }
+        const delivery = Number(form.deliveryPrice) || 0
+        return { subtotal, tax, delivery, totalExcl: subtotal + delivery, totalIncl: subtotal + tax + delivery }
+    }, [form.items, form.deliveryPrice])
+
+    const openCreate = async () => {
         setEditingId(null)
-        setForm(emptyForm)
+        setFormError('')
+        setEditBaseline(null)
+        setForm({ ...emptyForm, orderDate: todayStr(), warehouseId: pickDefaultWarehouse(), items: [{ ...emptyItem }] })
         formModal.open()
+        // Prefill a system-suggested order number the user can override.
+        try {
+            const res = await apiGet('/sales-orders/next-number')
+            const number = res?.number || ''
+            setSuggestedOrderNumber(number)
+            setForm((prev) => ({ ...prev, orderNumber: number }))
+        } catch {
+            setSuggestedOrderNumber(null)
+        }
     }
 
     const openEdit = (item) => {
         setEditingId(item.id)
+        setSuggestedOrderNumber(null)
+        setFormError('')
+        // Stock-affecting orders (shipped/closed) already consumed their units; remember per-product
+        // totals so the availability check credits them back when re-validating this order.
+        const wasStockAffecting = ['SHIPPED', 'CLOSED'].includes(item.status)
+        const baselineByProduct = {}
+        if (wasStockAffecting) {
+            for (const it of item.items || []) {
+                const pid = String(it.product?.id)
+                baselineByProduct[pid] = (baselineByProduct[pid] || 0) + (Number(it.quantity) || 0)
+            }
+        }
+        setEditBaseline(wasStockAffecting ? baselineByProduct : null)
         setForm({
             clientId: item.client?.id || '',
-            tenderId: item.tender?.id || '',
+            warehouseId: item.warehouse?.id || '',
             orderNumber: item.orderNumber || '',
             status: item.status || 'NEW',
             orderDate: item.orderDate || '',
@@ -137,8 +274,10 @@ export default function SalesOrdersPage() {
                     productId: it.product?.id || '',
                     quantity: it.quantity ?? 1,
                     unitPrice: it.unitPrice ?? 0,
+                    discountPercent: it.discountPercent ?? '',
+                    taxRatePercent: it.taxRatePercent != null ? String(Number(it.taxRatePercent)) : '',
                 }))
-                : [{ productId: '', quantity: 1, unitPrice: 0 }],
+                : [{ ...emptyItem }],
         })
         formModal.open()
     }
@@ -149,8 +288,18 @@ export default function SalesOrdersPage() {
     }
 
     const handleChange = (e) => {
-        const { name, value } = e.target
-        setForm((prev) => ({ ...prev, [name]: value }))
+        const { name, value, type, checked } = e.target
+        setForm((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }))
+    }
+
+    // Picking a client fills the delivery address with that client's address (kept if they have none).
+    const handleClientChange = (clientId) => {
+        const client = clients.find((c) => String(c.id) === String(clientId))
+        setForm((prev) => ({
+            ...prev,
+            clientId,
+            deliveryAddress: client?.address ? client.address : prev.deliveryAddress,
+        }))
     }
 
     const handleItemChange = (index, field, value) => {
@@ -160,11 +309,29 @@ export default function SalesOrdersPage() {
         }))
     }
 
-    const addItem = () => {
+    // Picking a product prefills its unit price and tax rate (the product's own rate, else the default).
+    const handleProductChange = (index, productId) => {
+        const product = products.find((p) => String(p.id) === String(productId))
         setForm((prev) => ({
             ...prev,
-            items: [...prev.items, { productId: '', quantity: 1, unitPrice: 0 }],
+            items: prev.items.map((item, i) =>
+                i === index
+                    ? {
+                          ...item,
+                          productId,
+                          unitPrice: product ? product.price : item.unitPrice,
+                          taxRatePercent:
+                              product?.taxRate?.percentage != null
+                                  ? String(Number(product.taxRate.percentage))
+                                  : defaultTaxValue,
+                      }
+                    : item
+            ),
         }))
+    }
+
+    const addItem = () => {
+        setForm((prev) => ({ ...prev, items: [...prev.items, { ...emptyItem }] }))
     }
 
     const removeItem = (index) => {
@@ -174,14 +341,54 @@ export default function SalesOrdersPage() {
         }))
     }
 
+    // Units of a product available in the selected warehouse. When editing a shipped order, its own
+    // units are credited back so unchanged quantities don't read as oversold.
+    const availableFor = (productId) => {
+        const raw = Number(stockLevels[String(productId)] ?? 0)
+        const credit = editBaseline ? editBaseline[String(productId)] || 0 : 0
+        return raw + credit
+    }
+
+    // Returns a message when the form can't be submitted yet, or null when it is valid.
+    const validate = () => {
+        if (!form.clientId) return t('salesOrders.validation.clientRequired')
+        if (!form.warehouseId) return t('salesOrders.validation.warehouseRequired')
+        if (!form.items.length) return t('salesOrders.validation.itemRequired')
+        for (let i = 0; i < form.items.length; i++) {
+            const it = form.items[i]
+            if (!it.productId) return t('salesOrders.validation.productRequired', { line: i + 1 })
+            if (!(Number(it.quantity) > 0)) return t('salesOrders.validation.quantityRequired', { line: i + 1 })
+        }
+        // Block overselling: no line may exceed what the chosen warehouse holds.
+        for (let i = 0; i < form.items.length; i++) {
+            const it = form.items[i]
+            const available = availableFor(it.productId)
+            if (Number(it.quantity) > available) {
+                return t('salesOrders.validation.overStock', { line: i + 1, available })
+            }
+        }
+        return null
+    }
+
     const handleSubmit = async (e) => {
         e.preventDefault()
+
+        const validationError = validate()
+        if (validationError) {
+            setFormError(validationError)
+            return
+        }
+        setFormError('')
         setLoading(true)
+
+        // If the user kept the system suggestion, send a blank number so the backend allocates (and
+        // advances) the counter; a changed value is sent as-is.
+        const keptSuggestion = !editingId && form.orderNumber === suggestedOrderNumber
 
         const payload = {
             clientId: Number(form.clientId),
-            tenderId: form.tenderId ? Number(form.tenderId) : null,
-            orderNumber: form.orderNumber || null,
+            warehouseId: Number(form.warehouseId),
+            orderNumber: keptSuggestion ? null : form.orderNumber || null,
             status: form.status,
             orderDate: form.orderDate || null,
             closingDate: form.closingDate || null,
@@ -192,6 +399,8 @@ export default function SalesOrdersPage() {
                 productId: Number(item.productId),
                 quantity: Number(item.quantity),
                 unitPrice: Number(item.unitPrice),
+                discountPercent: item.discountPercent !== '' && item.discountPercent != null ? Number(item.discountPercent) : 0,
+                taxRatePercent: item.taxRatePercent !== '' && item.taxRatePercent != null ? Number(item.taxRatePercent) : null,
             })),
         }
 
@@ -271,8 +480,30 @@ export default function SalesOrdersPage() {
                 </span>
             ),
         },
+        ...(invoicePerms.canView
+            ? [{
+                key: 'paymentStatus',
+                label: t('salesOrders.cols.payment'),
+                render: (row) => {
+                    const p = paymentFor(row)
+                    return (
+                        <div className="space-y-1">
+                            <StatusBadge status={p.paymentStatus} />
+                            {canSeePrices && Number(p.amountDue) > 0 && (
+                                <div className={`text-xs ${p.overdue ? 'font-semibold text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                                    {paymentMoney(p.amountDue, p.currency)}
+                                    {Number(p.penaltyAmount) > 0 && (
+                                        <span className="text-rose-500"> · {t('invoices.penaltyIncluded', { amount: paymentMoney(p.penaltyAmount, p.currency) })}</span>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )
+                },
+            }]
+            : []),
         { key: 'orderDate', label: t('salesOrders.cols.orderDate'), render: (row) => formatDate(row.orderDate) },
-        { key: 'totalAmount', label: t('common.total'), render: (row) => formatMoney(row.totalAmount) },
+        ...(canSeePrices ? [{ key: 'totalAmount', label: t('common.total'), render: (row) => formatMoney(row.totalAmount) }] : []),
         ...((canEdit || canDelete) ? [{
             key: 'actions',
             label: '',
@@ -319,6 +550,7 @@ export default function SalesOrdersPage() {
                         value: clientFilter,
                         onChange: setClientFilter,
                         placeholder: t('common.allClients'),
+                        searchable: true,
                         options: clients.map((c) => ({ value: String(c.id), label: c.name })),
                     },
                     {
@@ -335,6 +567,15 @@ export default function SalesOrdersPage() {
                             { value: 'CANCELLED', label: t('statuses.CANCELLED') },
                         ],
                     },
+                    ...(invoicePerms.canView
+                        ? [{
+                            key: 'paymentStatus',
+                            value: paymentStatusFilter,
+                            onChange: setPaymentStatusFilter,
+                            placeholder: t('salesOrders.allPaymentStatuses'),
+                            options: PAYMENT_STATUSES.map((s) => ({ value: s, label: t(`statuses.${s}`) })),
+                        }]
+                        : []),
                 ]}
             />
 
@@ -363,33 +604,38 @@ export default function SalesOrdersPage() {
                 title={editingId ? t('salesOrders.editTitle') : t('salesOrders.addTitle')}
                 onClose={formModal.close}
             >
-                <form onSubmit={handleSubmit} className="space-y-5">
+                <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+                    {formError && (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                            {formError}
+                        </div>
+                    )}
                     <div className="grid gap-4 md:grid-cols-2">
                         <FormSelect
                             id="sales-order-client"
                             label={t('salesOrders.form.client')}
                             name="clientId"
                             value={form.clientId}
-                            onChange={handleChange}
+                            onChange={(e) => handleClientChange(e.target.value)}
                             required
                             searchable
                             placeholder={t('salesOrders.form.selectClient')}
                             options={clients.map((item) => ({ value: String(item.id), label: item.name }))}
                             onQuickCreate={(name) => openQuickCreate('client', name, (item) => {
                                 setClients((prev) => [...prev, item.raw])
-                                handleChange({ target: { name: 'clientId', value: item.value } })
+                                handleClientChange(item.value)
                             })}
                         />
 
                         <FormSelect
-                            id="sales-order-tender"
-                            label={t('salesOrders.form.tender')}
-                            name="tenderId"
-                            value={form.tenderId}
+                            id="sales-order-warehouse"
+                            label={t('salesOrders.form.warehouse')}
+                            name="warehouseId"
+                            value={form.warehouseId}
                             onChange={handleChange}
-                            searchable
-                            placeholder={t('salesOrders.form.noTender')}
-                            options={tenders.map((item) => ({ value: String(item.id), label: item.title }))}
+                            required
+                            placeholder={t('salesOrders.form.selectWarehouse')}
+                            options={warehouses.map((w) => ({ value: String(w.id), label: w.name }))}
                         />
 
                         <FormField
@@ -447,7 +693,7 @@ export default function SalesOrdersPage() {
                             placeholder={t('salesOrders.form.deliveryPrice')}
                         />
 
-                        <FormField
+                        <AddressAutocompleteField
                             id="sales-order-delivery-address"
                             label={t('salesOrders.form.deliveryAddress')}
                             name="deliveryAddress"
@@ -459,11 +705,11 @@ export default function SalesOrdersPage() {
 
                     <TextareaField
                         id="sales-order-notes"
-                        label={t('common.notes')}
+                        label={t('salesOrders.form.additionalInfo')}
                         name="notes"
                         value={form.notes}
                         onChange={handleChange}
-                        placeholder={t('common.notes')}
+                        placeholder={t('salesOrders.form.additionalInfoPlaceholder')}
                         rows={3}
                     />
 
@@ -479,64 +725,124 @@ export default function SalesOrdersPage() {
                             </button>
                         </div>
 
-                        {form.items.map((item, index) => (
-                            <div
-                                key={index}
-                                className="grid gap-3 rounded-2xl border border-slate-200 p-4 md:grid-cols-[2fr_1fr_1fr_auto] dark:border-slate-800"
-                            >
-                                <FormSelect
-                                    id={`sales-order-item-product-${index}`}
-                                    label={t('salesOrders.form.product')}
-                                    name={`productId-${index}`}
-                                    value={item.productId}
-                                    onChange={(e) => handleItemChange(index, "productId", e.target.value)}
-                                    required
-                                    searchable
-                                    placeholder={t('salesOrders.form.selectProduct')}
-                                    options={products.map((product) => ({ value: String(product.id), label: product.name }))}
-                                    onQuickCreate={(name) => openQuickCreate('product', name, (created) => {
-                                        setProducts((prev) => [...prev, created.raw])
-                                        handleItemChange(index, 'productId', created.value)
-                                    })}
-                                />
+                        {form.items.map((item, index) => {
+                            const net = (Number(item.unitPrice) || 0) * (Number(item.quantity) || 0) * (1 - (Number(item.discountPercent) || 0) / 100)
+                            // Availability of this product in the chosen warehouse (sales draws stock down).
+                            const available = availableFor(item.productId)
+                            const showAvailability = !!form.warehouseId && !!item.productId
+                            const overStock = showAvailability && (Number(item.quantity) || 0) > available
+                            return (
+                                <div key={index} className="space-y-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                                    <div className="flex items-end gap-3">
+                                        <div className="flex-1">
+                                            <FormSelect
+                                                id={`sales-order-item-product-${index}`}
+                                                label={t('salesOrders.form.product')}
+                                                name={`productId-${index}`}
+                                                value={item.productId}
+                                                onChange={(e) => handleProductChange(index, e.target.value)}
+                                                required
+                                                searchable
+                                                placeholder={t('salesOrders.form.selectProduct')}
+                                                options={products.map((product) => ({
+                                                    value: String(product.id),
+                                                    label: product.sku ? `${product.name} · ${product.sku}` : product.name,
+                                                    search: product.sku,
+                                                }))}
+                                                onQuickCreate={(name) => openQuickCreate('product', name, (created) => {
+                                                    setProducts((prev) => [...prev, created.raw])
+                                                    handleProductChange(index, created.value)
+                                                })}
+                                            />
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => removeItem(index)}
+                                            disabled={form.items.length === 1}
+                                            aria-label={t('common.remove')}
+                                            title={t('common.remove')}
+                                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-rose-500 hover:bg-rose-50 disabled:opacity-40 dark:border-slate-700 dark:hover:bg-rose-950/40"
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </button>
+                                    </div>
 
-                                <FormField
-                                    id={`sales-order-item-quantity-${index}`}
-                                    label={t('common.quantity')}
-                                    type="number"
-                                    name={`quantity-${index}`}
-                                    value={item.quantity}
-                                    onChange={(e) => handleItemChange(index, "quantity", e.target.value)}
-                                    placeholder={t('common.qty')}
-                                />
+                                    {showAvailability && (
+                                        <p className={`text-xs ${overStock ? 'font-medium text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                                            {available === 0
+                                                ? t('salesOrders.form.notStockedHere')
+                                                : overStock
+                                                    ? t('salesOrders.form.overStock', { count: available })
+                                                    : t('salesOrders.form.inStockHere', { count: available })}
+                                        </p>
+                                    )}
 
-                                <FormField
-                                    id={`sales-order-item-unit-price-${index}`}
-                                    label={t('orderDetail.cols.unitPrice')}
-                                    type="number"
-                                    step="0.01"
-                                    name={`unitPrice-${index}`}
-                                    value={item.unitPrice}
-                                    onChange={(e) => handleItemChange(index, "unitPrice", e.target.value)}
-                                    placeholder={t('orderDetail.cols.unitPrice')}
-                                />
+                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                        <FormField
+                                            id={`sales-order-item-quantity-${index}`}
+                                            label={t('common.quantity')}
+                                            type="number"
+                                            min={1}
+                                            required
+                                            name={`quantity-${index}`}
+                                            value={item.quantity}
+                                            onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                                            placeholder={t('common.qty')}
+                                        />
+                                        <FormField
+                                            id={`sales-order-item-unit-price-${index}`}
+                                            label={t('orderDetail.cols.unitPrice')}
+                                            type="number"
+                                            step="0.01"
+                                            min={0}
+                                            name={`unitPrice-${index}`}
+                                            value={item.unitPrice}
+                                            onChange={(e) => handleItemChange(index, 'unitPrice', e.target.value)}
+                                            placeholder={t('orderDetail.cols.unitPrice')}
+                                        />
+                                        <FormField
+                                            id={`sales-order-item-discount-${index}`}
+                                            label={t('salesOrders.form.discountPercent')}
+                                            type="number"
+                                            step="0.01"
+                                            min={0}
+                                            max={100}
+                                            name={`discountPercent-${index}`}
+                                            value={item.discountPercent}
+                                            onChange={(e) => handleItemChange(index, 'discountPercent', e.target.value)}
+                                            placeholder="0"
+                                        />
+                                        <FormSelect
+                                            id={`sales-order-item-tax-${index}`}
+                                            label={t('salesOrders.form.tax')}
+                                            name={`taxRatePercent-${index}`}
+                                            value={item.taxRatePercent}
+                                            onChange={(e) => handleItemChange(index, 'taxRatePercent', e.target.value)}
+                                            placeholder={t('salesOrders.form.noTax')}
+                                            options={taxOptions}
+                                        />
+                                    </div>
 
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-slate-700 opacity-0 dark:text-slate-200">
-                                        {t('common.remove')}
-                                    </label>
-                                    <button
-                                        type="button"
-                                        onClick={() => removeItem(index)}
-                                        disabled={form.items.length === 1}
-                                        className="w-full rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                                    >
-                                        {t('common.remove')}
-                                    </button>
+                                    {canSeePrices && (
+                                        <div className="text-right text-sm text-slate-500 dark:text-slate-400">
+                                            {t('salesOrders.form.lineNet')}: <span className="font-medium text-slate-700 dark:text-slate-200">{formatMoney(net)}</span>
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
-                        ))}
+                            )
+                        })}
                     </div>
+
+                    {canSeePrices && (
+                        <div className="ml-auto w-full max-w-xs space-y-1.5 rounded-2xl border border-slate-200 p-4 text-sm dark:border-slate-800">
+                            <TotalRow label={t('salesOrders.form.subtotalExclTax')} value={formatMoney(totals.subtotal)} />
+                            <TotalRow label={t('salesOrders.form.taxTotal')} value={formatMoney(totals.tax)} />
+                            <TotalRow label={t('salesOrders.form.deliveryPrice')} value={formatMoney(totals.delivery)} />
+                            <div className="my-1 border-t border-slate-200 dark:border-slate-700" />
+                            <TotalRow label={t('salesOrders.form.totalExclTax')} value={formatMoney(totals.totalExcl)} />
+                            <TotalRow label={t('salesOrders.form.totalInclTax')} value={formatMoney(totals.totalIncl)} strong />
+                        </div>
+                    )}
 
                     <div className="flex justify-end gap-3">
                         <button
@@ -582,6 +888,15 @@ export default function SalesOrdersPage() {
                 onClose={closeQuickCreate}
                 onCreated={handleQuickCreated}
             />
+        </div>
+    )
+}
+
+function TotalRow({ label, value, strong = false }) {
+    return (
+        <div className={`flex items-center justify-between ${strong ? 'text-base font-semibold text-slate-900 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}>
+            <span>{label}</span>
+            <span>{value}</span>
         </div>
     )
 }

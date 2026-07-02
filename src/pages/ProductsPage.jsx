@@ -12,12 +12,15 @@ import Modal from '../components/Modal'
 import ConfirmModal from '../components/ConfirmModal'
 import { useModal } from '../hooks/useModal'
 import { useQuickCreate } from '../hooks/useQuickCreate'
-import { usePermissions } from '../context/AuthContext'
+import { useAuth, usePermissions } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
 import QuickCreateModal from '../components/QuickCreateModal'
+import CategoryManagerModal from '../components/CategoryManagerModal'
+import LotAdjustModal from '../components/LotAdjustModal'
 import { useToast } from '../context/ToastContext'
-import { formatMoney, safeArray, parseBool, toNumber } from '../utils/format'
+import { safeArray, parseBool, toNumber } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
-import { Eye, Pencil, Trash2 } from 'lucide-react'
+import { Eye, Pencil, Trash2, PackagePlus } from 'lucide-react'
 import ImageUploadField, { resolveImageUrl } from '../components/ImageUploadField.jsx'
 import { stockStatusOf } from '../utils/stock'
 
@@ -62,8 +65,9 @@ const emptyForm = {
     description: '',
     images: [],
     price: '',
-    stockQuantity: 0,
+    taxRateId: '',
     minimumStock: 0,
+    warehouseMethod: 'FEFO',
     active: true,
 }
 
@@ -74,11 +78,20 @@ const parseCsv = (value) => (value ? value.split(',').filter(Boolean) : [])
 export default function ProductsPage() {
     const { t } = useTranslation()
     const { canCreate, canEdit, canDelete } = usePermissions('PRODUCTS')
+    const { canCreate: canAdjustStock } = usePermissions('INVENTORY')
+    const { canCreate: canCreateCategory, canEdit: canEditCategory, canDelete: canDeleteCategory } = usePermissions('CATEGORIES')
+    const canManageCategories = canCreateCategory || canEditCategory || canDeleteCategory
+    const { canSeePrices } = useAuth()
+    const { formatPrice, pricesIncludeTax, defaultTaxPercent } = useSettings()
     const toast = useToast()
     const { quickCreate, openQuickCreate, closeQuickCreate, handleQuickCreated } = useQuickCreate()
     const formModal = useModal()
     const deleteModal = useModal()
     const bulkDeleteModal = useModal()
+    const adjustModal = useModal()
+    const categoryModal = useModal()
+    const [adjustingProduct, setAdjustingProduct] = useState(null)
+    const [adjustBatches, setAdjustBatches] = useState([])
 
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -86,6 +99,7 @@ export default function ProductsPage() {
     const [rows, setRows] = useState([])
     const [manufacturers, setManufacturers] = useState([])
     const [categories, setCategories] = useState([])
+    const [taxRates, setTaxRates] = useState([])
     const [form, setForm] = useState(emptyForm)
     const [editingId, setEditingId] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
@@ -138,14 +152,16 @@ export default function ProductsPage() {
     }, [editId, rows])
 
     const loadData = async () => {
-        const [productsRes, manufacturersRes, categoriesRes] = await Promise.all([
+        const [productsRes, manufacturersRes, categoriesRes, taxRatesRes] = await Promise.all([
             apiGet('/products?page=0&size=500&sortBy=id&sortDir=desc'),
             apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/categories?page=0&size=500&sortBy=id&sortDir=asc'),
+            apiGet('/settings/tax-rates'),
         ])
         setRows(safeArray(productsRes))
         setManufacturers(safeArray(manufacturersRes))
         setCategories(safeArray(categoriesRes))
+        setTaxRates(safeArray(taxRatesRes))
     }
 
     const filteredRows = useMemo(() => {
@@ -228,8 +244,9 @@ export default function ProductsPage() {
             description: item.description || '',
             images: item.imageUrls || [],
             price: item.price || '',
-            stockQuantity: item.stockQuantity ?? 0,
+            taxRateId: item.taxRate?.id ? String(item.taxRate.id) : '',
             minimumStock: item.minimumStock ?? 0,
+            warehouseMethod: item.warehouseMethod || 'FEFO',
             active: !!item.active,
         })
         formModal.open()
@@ -238,6 +255,17 @@ export default function ProductsPage() {
     const openDelete = (item) => {
         setDeletingItem(item)
         deleteModal.open()
+    }
+
+    const openAdjust = async (item) => {
+        setAdjustingProduct(item)
+        try {
+            const res = await apiGet(`/products/${item.id}/batches`)
+            setAdjustBatches(safeArray(res))
+        } catch {
+            setAdjustBatches([])
+        }
+        adjustModal.open()
     }
 
     const handleChange = (e) => {
@@ -259,8 +287,9 @@ export default function ProductsPage() {
             description: form.description,
             imageUrls: form.images,
             price: Number(form.price),
-            stockQuantity: Number(form.stockQuantity),
+            taxRate: form.taxRateId ? { id: Number(form.taxRateId) } : null,
             minimumStock: Number(form.minimumStock),
+            warehouseMethod: form.warehouseMethod,
             active: form.active,
         }
 
@@ -309,6 +338,20 @@ export default function ProductsPage() {
         }
     }
 
+    const defaultRate = taxRates.find((r) => r.isDefault)
+    const taxRateOptions = [
+        { value: '', label: defaultRate ? t('products.tax.useDefault', { name: defaultRate.name }) : t('products.tax.useDefaultPlain') },
+        ...taxRates.map((r) => ({ value: String(r.id), label: `${r.name} (${Number(r.percentage)}%)` })),
+    ]
+
+    // The rate shown for a product: its own rate, else the company default (falling back to the
+    // bare default percentage if no named default rate exists).
+    const taxLabelOf = (row) => {
+        if (row.taxRate) return `${row.taxRate.name} (${Number(row.taxRate.percentage)}%)`
+        if (defaultRate) return t('products.tax.defaultTag', { name: defaultRate.name })
+        return defaultTaxPercent ? `${defaultTaxPercent}%` : t('common.none')
+    }
+
     const columns = [
         {
             key: 'image',
@@ -327,7 +370,17 @@ export default function ProductsPage() {
         { key: 'sku', label: t('common.sku') },
         { key: 'manufacturer', label: t('products.cols.manufacturer'), render: (row) => row.manufacturer?.name || '-' },
         { key: 'category', label: t('products.cols.category'), render: (row) => row.category?.name || '-' },
-        { key: 'price', label: t('common.price'), render: (row) => formatMoney(row.price) },
+        ...(canSeePrices
+            ? [{
+                key: 'price',
+                label: `${t('common.price')} ${pricesIncludeTax ? t('settings.tax.inclShort') : t('settings.tax.exclShort')}`,
+                render: (row) => formatPrice(row.price, row.taxRate?.percentage),
+            }, {
+                key: 'tax',
+                label: t('products.cols.tax'),
+                render: (row) => taxLabelOf(row),
+            }]
+            : []),
         {
             key: 'stockQuantity',
             label: t('products.cols.stock'),
@@ -371,6 +424,7 @@ export default function ProductsPage() {
                     <ActionMenu
                         actions={[
                             { key: 'view', label: t('common.viewDetails'), icon: Eye, onClick: () => navigate(`/products/${row.id}`) },
+                            ...(canAdjustStock ? [{ key: 'adjust', label: t('inventory.adjustStock'), icon: PackagePlus, onClick: () => openAdjust(row) }] : []),
                             ...(canEdit ? [{ key: 'edit', label: t('common.edit'), icon: Pencil, onClick: () => openEdit(row) }] : []),
                             ...(canDelete ? [{ key: 'delete', label: t('common.delete'), icon: Trash2, danger: true, onClick: () => openDelete(row) }] : []),
                         ]}
@@ -399,6 +453,11 @@ export default function ProductsPage() {
                             }}
                             onImported={loadData}
                         />
+                        {canManageCategories && (
+                            <button onClick={categoryModal.open} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                                {t('common.configureCategories')}
+                            </button>
+                        )}
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
                                 {t('products.add')}
@@ -416,6 +475,7 @@ export default function ProductsPage() {
                         key: 'manufacturer',
                         value: manufacturerFilter,
                         onChange: setManufacturerFilter,
+                        searchable: true,
                         placeholder: t('common.allManufacturers'),
                         options: manufacturers.map((m) => ({ value: String(m.id), label: m.name })),
                     },
@@ -423,6 +483,7 @@ export default function ProductsPage() {
                         key: 'category',
                         value: categoryFilter,
                         onChange: setCategoryFilter,
+                        searchable: true,
                         placeholder: t('common.allCategories'),
                         options: categories.map((c) => ({ value: String(c.id), label: c.name })),
                     },
@@ -565,7 +626,7 @@ export default function ProductsPage() {
 
                     <FormField
                         id="product-price"
-                        label={t('common.price')}
+                        label={`${t('common.price')} ${t('settings.tax.exclShort')}`}
                         type="number"
                         step="0.01"
                         name="price"
@@ -575,21 +636,21 @@ export default function ProductsPage() {
                         className="md:col-span-2"
                     />
 
+                    <FormSelect
+                        id="product-tax-rate"
+                        label={t('products.form.taxRate')}
+                        name="taxRateId"
+                        value={form.taxRateId}
+                        onChange={handleChange}
+                        placeholder={t('products.form.taxRate')}
+                        className="md:col-span-2"
+                        options={taxRateOptions}
+                    />
+
                     <ImageUploadField
                         value={form.images}
                         onChange={(images) => setForm((prev) => ({ ...prev, images }))}
                         className="md:col-span-4"
-                    />
-
-                    <FormField
-                        id="product-stock-quantity"
-                        label={t('products.cols.stock')}
-                        type="number"
-                        name="stockQuantity"
-                        value={form.stockQuantity}
-                        onChange={handleChange}
-                        placeholder="0"
-                        className="md:col-span-2"
                     />
 
                     <FormField
@@ -623,6 +684,40 @@ export default function ProductsPage() {
                         className="md:col-span-2"
                     />
 
+                    <FormSelect
+                        id="product-warehouse-method"
+                        label={
+                            <span className="inline-flex items-center gap-2">
+                                {t('products.form.warehouseMethod')}
+                                <span className="group relative inline-flex">
+                                    <button
+                                        type="button"
+                                        tabIndex={0}
+                                        aria-label={t('products.form.warehouseMethodTooltipAria')}
+                                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-xs font-bold text-slate-500 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+                                    >
+                                        ?
+                                    </button>
+                                    <span
+                                        role="tooltip"
+                                        className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-56 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-normal text-white shadow-lg group-hover:block group-focus-within:block dark:bg-slate-700"
+                                    >
+                                        {t('products.form.warehouseMethodTooltip')}
+                                    </span>
+                                </span>
+                            </span>
+                        }
+                        name="warehouseMethod"
+                        value={form.warehouseMethod}
+                        onChange={handleChange}
+                        className="md:col-span-2"
+                        options={[
+                            { value: 'FEFO', label: t('products.warehouseMethods.FEFO') },
+                            { value: 'FIFO', label: t('products.warehouseMethods.FIFO') },
+                            { value: 'LIFO', label: t('products.warehouseMethods.LIFO') },
+                        ]}
+                    />
+
                     <TextareaField
                         id="product-description"
                         label={t('common.description')}
@@ -633,16 +728,19 @@ export default function ProductsPage() {
                         className="md:col-span-4"
                     />
 
-                    <label className="md:col-span-4 inline-flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
-                        <input
-                            type="checkbox"
-                            name="active"
-                            checked={form.active}
-                            onChange={handleChange}
-                            className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
-                        />
-                        <span className="font-medium text-slate-700 dark:text-slate-200">{t('common.active')}</span>
-                    </label>
+                    {/* Active is a lifecycle toggle, only meaningful once a record exists — new records are active. */}
+                    {editingId && (
+                        <label className="md:col-span-4 inline-flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
+                            <input
+                                type="checkbox"
+                                name="active"
+                                checked={form.active}
+                                onChange={handleChange}
+                                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
+                            />
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{t('common.active')}</span>
+                        </label>
+                    )}
 
                     <div className="md:col-span-4 flex justify-end gap-3">
                         <button
@@ -687,6 +785,23 @@ export default function ProductsPage() {
                 isOpen={!!quickCreate}
                 onClose={closeQuickCreate}
                 onCreated={handleQuickCreated}
+            />
+
+            <CategoryManagerModal
+                isOpen={categoryModal.isOpen}
+                onClose={categoryModal.close}
+                endpoint="/categories"
+                module="CATEGORIES"
+                i18nKey="categories"
+                onChanged={loadData}
+            />
+
+            <LotAdjustModal
+                product={adjustingProduct}
+                batches={adjustBatches}
+                isOpen={adjustModal.isOpen}
+                onClose={adjustModal.close}
+                onSaved={loadData}
             />
         </div>
     )

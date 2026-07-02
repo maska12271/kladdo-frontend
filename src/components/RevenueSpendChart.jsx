@@ -18,7 +18,7 @@ export default function RevenueSpendChart({ data = [], showRevenue = true, showS
     const { t } = useTranslation()
     const series = [
         showRevenue && { key: 'revenue', label: t('dashboard.chart.revenue'), bar: 'fill-teal-500', dot: 'bg-teal-500' },
-        showSpend && { key: 'spend', label: t('dashboard.chart.spend'), bar: 'fill-amber-500', dot: 'bg-amber-500' },
+        showSpend && { key: 'spend', label: t('dashboard.chart.spend'), bar: 'fill-secondary-300', dot: 'bg-secondary-300' },
     ].filter(Boolean)
 
     const values = data.flatMap((d) => series.map((s) => Number(d[s.key]) || 0))

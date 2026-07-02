@@ -5,15 +5,16 @@ import {
     LayoutDashboard,
     Package,
     Factory,
-    Tags,
     Users,
     ShoppingCart,
     Truck,
     FileText,
     UserCog,
+    Settings,
     LogOut,
     PanelLeftClose,
     PanelLeftOpen,
+    Warehouse,
 } from "lucide-react"
 import { useAuth } from "../context/AuthContext"
 import { getCookie, setCookie } from "../utils/cookies"
@@ -24,11 +25,11 @@ const baseLinks = [
     { to: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
     { to: "/products", labelKey: "products", icon: Package, module: "PRODUCTS" },
     { to: "/manufacturers", labelKey: "manufacturers", icon: Factory, module: "MANUFACTURERS" },
-    { to: "/categories", labelKey: "categories", icon: Tags, module: "CATEGORIES" },
     { to: "/clients", labelKey: "clients", icon: Users, module: "CLIENTS" },
     { to: "/sales-orders", labelKey: "salesOrders", icon: ShoppingCart, module: "SALES_ORDERS" },
     { to: "/purchase-orders", labelKey: "purchaseOrders", icon: Truck, module: "PURCHASE_ORDERS" },
     { to: "/tenders", labelKey: "tenders", icon: FileText, module: "TENDERS" },
+    { to: "/warehouses", labelKey: "warehouses", icon: Warehouse, module: "WAREHOUSES" },
 ]
 
 const COLLAPSE_COOKIE = "sidebar_collapsed"
@@ -67,28 +68,28 @@ export default function Sidebar() {
 
     const visibleLinks = baseLinks.filter((link) => !link.module || can(link.module, "canView"))
     const links = isAdmin
-        ? [...visibleLinks, { to: "/users", labelKey: "users", icon: UserCog }]
+        ? [
+              ...visibleLinks,
+              { to: "/users", labelKey: "users", icon: UserCog },
+              { to: "/settings", labelKey: "settings", icon: Settings },
+          ]
         : visibleLinks
 
     return (
         <aside
             className={`sticky top-0 z-40 hidden h-screen shrink-0 flex-col self-start border-r border-slate-200 bg-white transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-900 md:flex ${
-                collapsed ? "w-20 p-3" : "w-72 p-5"
+                collapsed ? "w-20 p-3" : "w-64 p-4"
             }`}
         >
-            <div className={`mb-6 flex ${collapsed ? "flex-col items-center gap-3" : "items-center justify-between"}`}>
+            <div className={`mb-4 flex ${collapsed ? "flex-col items-center gap-3" : "items-center justify-between"}`}>
                 {collapsed ? (
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-600 text-sm font-bold text-white">
-                        TS
-                    </div>
+                    <img src="/kladdo-logo.svg" alt={t('nav.appName')} className="h-8 w-auto" />
                 ) : (
-                    <div>
+                    <div className="flex items-center gap-2.5">
+                        <img src="/kladdo-logo.svg" alt="" aria-hidden="true" className="h-8 w-auto shrink-0" />
                         <h1 className="text-xl font-bold tracking-tight text-teal-700 dark:text-teal-400">
-                            TenderSys
+                            {t('nav.appName')}
                         </h1>
-                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                            {t('nav.tagline')}
-                        </p>
                     </div>
                 )}
                 <button
@@ -100,7 +101,7 @@ export default function Sidebar() {
                 </button>
             </div>
 
-            <nav className={`flex-1 space-y-1.5 ${collapsed ? "overflow-visible" : "overflow-y-auto"}`}>
+            <nav className={`flex-1 space-y-0.5 ${collapsed ? "overflow-visible" : "overflow-y-auto"}`}>
                 {links.map((link) => {
                     const Icon = link.icon
 
@@ -109,8 +110,8 @@ export default function Sidebar() {
                             key={link.to}
                             to={link.to}
                             className={({ isActive }) =>
-                                `group relative flex items-center rounded-xl text-sm font-medium transition ${
-                                    collapsed ? "justify-center px-0 py-3" : "gap-3 px-4 py-3"
+                                `group relative flex items-center rounded-lg text-sm font-medium transition ${
+                                    collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2"
                                 } ${
                                     isActive
                                         ? "bg-teal-600 text-white shadow-sm"
@@ -118,7 +119,7 @@ export default function Sidebar() {
                                 }`
                             }
                         >
-                            <Icon className="h-5 w-5 shrink-0" />
+                            <Icon className="h-[18px] w-[18px] shrink-0" />
                             {!collapsed && <span>{t(`nav.${link.labelKey}`)}</span>}
                             {collapsed && <Tooltip label={t(`nav.${link.labelKey}`)} />}
                         </NavLink>
@@ -126,7 +127,7 @@ export default function Sidebar() {
                 })}
             </nav>
 
-            <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-800">
                 {collapsed ? (
                     <div className="flex flex-col items-center gap-3">
                         <div
@@ -138,7 +139,7 @@ export default function Sidebar() {
                         <button
                             onClick={logout}
                             aria-label={t('nav.signOut')}
-                            className="group relative flex items-center justify-center rounded-xl p-2.5 text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                            className="group relative flex items-center justify-center rounded-lg p-2.5 text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                             <LogOut className="h-5 w-5 shrink-0" />
                             <Tooltip label={t('nav.signOut')} />
@@ -146,7 +147,7 @@ export default function Sidebar() {
                     </div>
                 ) : (
                     <>
-                        <div className="mb-3 px-1">
+                        <div className="mb-2 px-1">
                             <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
                                 {user?.fullName || user?.email}
                             </p>
@@ -157,9 +158,9 @@ export default function Sidebar() {
                         </div>
                         <button
                             onClick={logout}
-                            className="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
-                            <LogOut className="h-5 w-5 shrink-0" />
+                            <LogOut className="h-[18px] w-[18px] shrink-0" />
                             <span>{t('nav.signOut')}</span>
                         </button>
                     </>

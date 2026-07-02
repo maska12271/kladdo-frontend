@@ -1,0 +1,96 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { apiGet } from '../api/client'
+import { useAuth } from './AuthContext'
+
+const SettingsContext = createContext(null)
+
+const DEFAULTS = {
+    currency: 'EUR',
+    pricesIncludeTax: false,
+    defaultTaxPercent: 0,
+    defaultWarehouseId: null,
+    defaultPrepaymentPercent: 0,
+    invoicePaymentTermDays: 14,
+    latePaymentPenaltyPercent: 0,
+    penaltyPeriod: 'DAILY',
+}
+
+/**
+ * Loads the company's display settings (currency, tax-inclusive preference, default tax rate) once a
+ * user is authenticated, and exposes a currency-aware price formatter. These are read-only and
+ * available to every role, so non-admin pages (e.g. the product catalogue) can render prices the way
+ * the company prefers. Admins edit the underlying settings on the Settings page; `refresh()` lets that
+ * page push changes here without a full reload.
+ */
+export function SettingsProvider({ children }) {
+    const { isAuthenticated } = useAuth()
+    const [settings, setSettings] = useState(DEFAULTS)
+
+    const refresh = useCallback(async () => {
+        try {
+            const fresh = await apiGet('/settings/display')
+            if (fresh) {
+                setSettings({
+                    currency: fresh.currency || 'EUR',
+                    pricesIncludeTax: !!fresh.pricesIncludeTax,
+                    defaultTaxPercent: Number(fresh.defaultTaxPercent) || 0,
+                    defaultWarehouseId: fresh.defaultWarehouseId ?? null,
+                    defaultPrepaymentPercent: Number(fresh.defaultPrepaymentPercent) || 0,
+                    invoicePaymentTermDays: fresh.invoicePaymentTermDays ?? 14,
+                    latePaymentPenaltyPercent: Number(fresh.latePaymentPenaltyPercent) || 0,
+                    penaltyPeriod: fresh.penaltyPeriod || 'DAILY',
+                })
+            }
+        } catch {
+            /* Fall back to defaults; a transient failure shouldn't block the app. */
+        }
+    }, [])
+
+    useEffect(() => {
+        if (isAuthenticated) refresh()
+        else setSettings(DEFAULTS)
+    }, [isAuthenticated, refresh])
+
+    const value = useMemo(() => {
+        const { currency, pricesIncludeTax, defaultTaxPercent, defaultWarehouseId, defaultPrepaymentPercent, invoicePaymentTermDays, latePaymentPenaltyPercent, penaltyPeriod } = settings
+
+        // The tax percentage that applies to a value: an explicit rate, else the company default.
+        const effectiveTaxPercent = (taxPercent) =>
+            taxPercent == null || Number.isNaN(Number(taxPercent)) ? defaultTaxPercent : Number(taxPercent)
+
+        const formatCurrency = (amount) =>
+            new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: currency || 'EUR',
+                minimumFractionDigits: 2,
+            }).format(Number(amount || 0))
+
+        // Net price formatted in the company currency, made tax-inclusive when that preference is on.
+        const formatPrice = (netPrice, taxPercent) => {
+            const net = Number(netPrice || 0)
+            const gross = pricesIncludeTax ? net * (1 + effectiveTaxPercent(taxPercent) / 100) : net
+            return formatCurrency(gross)
+        }
+
+        return {
+            currency,
+            pricesIncludeTax,
+            defaultTaxPercent,
+            defaultWarehouseId,
+            defaultPrepaymentPercent,
+            invoicePaymentTermDays,
+            latePaymentPenaltyPercent,
+            penaltyPeriod,
+            effectiveTaxPercent,
+            formatCurrency,
+            formatPrice,
+            refresh,
+        }
+    }, [settings, refresh])
+
+    return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
+}
+
+export function useSettings() {
+    return useContext(SettingsContext)
+}

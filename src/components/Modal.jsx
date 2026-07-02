@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { X } from 'lucide-react'
 
 function getFocusableElements(container) {
     if (!container) return []
@@ -81,23 +82,30 @@ export default function Modal({ isOpen, title, children, onClose, width = 'max-w
     if (!isOpen) return null
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+        <div
+            className="overlay-enter fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+            onMouseDown={(e) => {
+                // Click on the dim backdrop (outside the dialog) dismisses the modal.
+                if (e.target === e.currentTarget) onClose()
+            }}
+        >
             <div
-                className={`w-full ${width} rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900`}
+                className={`dialog-enter shadow-pop w-full ${width} rounded-3xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900`}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="modal-title"
                 ref={dialogRef}
                 tabIndex={-1}
             >
-                <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
-                    <h2 id="modal-title" className="text-xl font-semibold">{title}</h2>
+                <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+                    <h2 id="modal-title" className="text-xl font-semibold tracking-tight">{title}</h2>
                     <button
                         type="button"
                         onClick={onClose}
-                        className="rounded-xl px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        aria-label={t('common.close')}
+                        className="-mr-1.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                     >
-                        {t('common.close')}
+                        <X className="h-5 w-5" />
                     </button>
                 </div>
 

@@ -16,20 +16,31 @@ function Trend({ pct, good = true }) {
     )
 }
 
-export default function StatCard({ title, value, hint, color = 'teal', trend, compact = false }) {
-    const map = {
-        teal: 'from-teal-500 to-cyan-500',
-        blue: 'from-blue-500 to-indigo-500',
-        amber: 'from-amber-500 to-orange-500',
-        rose: 'from-rose-500 to-pink-500',
-    }
+// Palette-aligned accents (brand teal, secondary blue, amber, danger rose) — no off-palette hues.
+const ACCENT = {
+    teal: { badge: 'bg-teal-100 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300', dot: 'bg-teal-500' },
+    blue: { badge: 'bg-secondary-100 text-secondary-700 dark:bg-secondary-500/15 dark:text-secondary-300', dot: 'bg-secondary-500' },
+    amber: { badge: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300', dot: 'bg-amber-500' },
+    rose: { badge: 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300', dot: 'bg-rose-500' },
+}
+
+export default function StatCard({ title, value, hint, color = 'teal', trend, compact = false, icon: Icon }) {
+    const accent = ACCENT[color] || ACCENT.teal
 
     return (
-        <div className={`rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 ${compact ? 'p-4' : 'p-5'}`}>
-            <div className={`rounded-full bg-gradient-to-r ${map[color]} ${compact ? 'mb-2 h-1.5 w-14' : 'mb-4 h-2 w-20'}`} />
-            <p className="truncate text-sm text-slate-500 dark:text-slate-400">{title}</p>
-            <p className={`mt-1 truncate font-bold ${compact ? 'text-2xl' : 'text-3xl'}`}>{value}</p>
-            <p className="mt-1 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <div className={`shadow-card rounded-2xl border border-slate-200 bg-white transition-shadow hover:shadow-card-md dark:border-slate-800 dark:bg-slate-900 ${compact ? 'p-4' : 'p-5'}`}>
+            <div className="flex items-start justify-between gap-3">
+                <p className="truncate text-sm font-medium text-slate-500 dark:text-slate-400">{title}</p>
+                {Icon ? (
+                    <span className={`inline-flex shrink-0 items-center justify-center rounded-xl ${accent.badge} ${compact ? 'h-8 w-8' : 'h-9 w-9'}`}>
+                        <Icon className={compact ? 'h-4 w-4' : 'h-[18px] w-[18px]'} />
+                    </span>
+                ) : (
+                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                )}
+            </div>
+            <p className={`mt-2 truncate font-bold tracking-tight tabular-nums ${compact ? 'text-2xl' : 'text-3xl'}`}>{value}</p>
+            <p className="mt-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 {trend ? <Trend pct={trend.pct} good={trend.good} /> : null}
                 {hint ? <span className="truncate">{hint}</span> : null}
             </p>

@@ -11,10 +11,16 @@ import ActionMenu from '../components/ActionMenu'
 import Modal from '../components/Modal'
 import ConfirmModal from '../components/ConfirmModal'
 import { useModal } from '../hooks/useModal'
+import { useQuickCreate } from '../hooks/useQuickCreate'
 import { usePermissions } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { safeArray, parseBool } from '../utils/format'
 import {FormField, TextareaField} from "../components/FormField.jsx";
+import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
+import CustomSelect from '../components/CustomSelect'
+import CategoryChips from '../components/CategoryChips'
+import QuickCreateModal from '../components/QuickCreateModal'
+import CategoryManagerModal from '../components/CategoryManagerModal'
 import { Eye, Pencil, Trash2 } from 'lucide-react'
 
 const exportColumns = [
@@ -25,6 +31,7 @@ const exportColumns = [
     { header: 'Email', value: (r) => r.email },
     { header: 'Phone', value: (r) => r.phone },
     { header: 'Website', value: (r) => r.website },
+    { header: 'Categories', value: (r) => (r.categories || []).map((c) => c.name).join('; ') },
     { header: 'Notes', value: (r) => r.notes },
     { header: 'Active', value: (r) => (r.active ? 'Active' : 'Inactive') },
 ]
@@ -48,12 +55,15 @@ const emptyForm = {
     phone: '',
     website: '',
     notes: '',
+    categoryIds: [],
     active: true,
 }
 
 export default function ManufacturersPage() {
     const { t } = useTranslation()
     const { canCreate, canEdit, canDelete } = usePermissions('MANUFACTURERS')
+    const { canCreate: canCreateCategory, canEdit: canEditCategory, canDelete: canDeleteCategory } = usePermissions('PARTNER_CATEGORIES')
+    const canManageCategories = canCreateCategory || canEditCategory || canDeleteCategory
     const toast = useToast()
     const navigate = useNavigate()
     const parseImportRow = (r) => {
@@ -73,17 +83,21 @@ export default function ManufacturersPage() {
         }
     }
     const [searchParams, setSearchParams] = useSearchParams()
+    const { quickCreate, openQuickCreate, closeQuickCreate, handleQuickCreated } = useQuickCreate()
     const formModal = useModal()
     const deleteModal = useModal()
     const bulkDeleteModal = useModal()
+    const categoryModal = useModal()
 
     const [rows, setRows] = useState([])
+    const [categories, setCategories] = useState([])
     const [form, setForm] = useState(emptyForm)
     const [editingId, setEditingId] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState([])
+    const [categoryFilter, setCategoryFilter] = useState([])
     const [loading, setLoading] = useState(false)
 
     useEffect(() => {
@@ -108,8 +122,12 @@ export default function ManufacturersPage() {
     }, [editId, rows])
 
     const loadData = async () => {
-        const response = await apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=desc')
-        setRows(safeArray(response))
+        const [manufacturersRes, categoriesRes] = await Promise.all([
+            apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=desc'),
+            apiGet('/partner-categories?page=0&size=500&sortBy=name&sortDir=asc'),
+        ])
+        setRows(safeArray(manufacturersRes))
+        setCategories(safeArray(categoriesRes))
     }
 
     const filteredRows = useMemo(() => {
@@ -125,9 +143,13 @@ export default function ManufacturersPage() {
             const matchesStatus =
                 statusFilter.length === 0 || statusFilter.includes(row.active ? 'active' : 'inactive')
 
-            return matchesSearch && matchesStatus
+            const matchesCategory =
+                categoryFilter.length === 0 ||
+                (row.categories || []).some((c) => categoryFilter.includes(String(c.id)))
+
+            return matchesSearch && matchesStatus && matchesCategory
         })
-    }, [rows, search, statusFilter])
+    }, [rows, search, statusFilter, categoryFilter])
 
     const openCreate = () => {
         setEditingId(null)
@@ -145,6 +167,7 @@ export default function ManufacturersPage() {
             phone: item.phone || '',
             website: item.website || '',
             notes: item.notes || '',
+            categoryIds: (item.categories || []).map((c) => String(c.id)),
             active: !!item.active,
         })
         formModal.open()
@@ -164,11 +187,17 @@ export default function ManufacturersPage() {
         e.preventDefault()
         setLoading(true)
 
+        const { categoryIds, ...rest } = form
+        const payload = {
+            ...rest,
+            categories: categoryIds.map((id) => ({ id: Number(id) })),
+        }
+
         try {
             if (editingId) {
-                await apiPut(`/manufacturers/${editingId}`, form)
+                await apiPut(`/manufacturers/${editingId}`, payload)
             } else {
-                await apiPost('/manufacturers', form)
+                await apiPost('/manufacturers', payload)
             }
             toast.success(editingId ? t('manufacturers.updated') : t('manufacturers.created'))
             formModal.close()
@@ -216,6 +245,11 @@ export default function ManufacturersPage() {
         { key: 'phone', label: t('common.phone') },
         { key: 'website', label: t('common.website') },
         {
+            key: 'categories',
+            label: t('partnerCategories.label'),
+            render: (row) => <CategoryChips categories={row.categories} />,
+        },
+        {
             key: 'active',
             label: t('common.status'),
             render: (row) => <StatusBadge status={row.active ? 'ACTIVE' : 'INACTIVE'} />,
@@ -256,6 +290,11 @@ export default function ManufacturersPage() {
                             }}
                             onImported={loadData}
                         />
+                        {canManageCategories && (
+                            <button onClick={categoryModal.open} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                                {t('common.configureCategories')}
+                            </button>
+                        )}
                         {canCreate && (
                             <button onClick={openCreate} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-700">
                                 {t('manufacturers.add')}
@@ -269,6 +308,14 @@ export default function ManufacturersPage() {
                 search={search}
                 onSearchChange={setSearch}
                 filters={[
+                    {
+                        key: 'category',
+                        value: categoryFilter,
+                        onChange: setCategoryFilter,
+                        searchable: true,
+                        placeholder: t('common.allPartnerCategories'),
+                        options: categories.map((c) => ({ value: String(c.id), label: c.name })),
+                    },
                     {
                         key: 'status',
                         value: statusFilter,
@@ -357,7 +404,7 @@ export default function ManufacturersPage() {
                         className="md:col-span-2"
                     />
 
-                    <FormField
+                    <AddressAutocompleteField
                         id="manufacturer-address"
                         label={t('common.address')}
                         name="address"
@@ -366,6 +413,25 @@ export default function ManufacturersPage() {
                         placeholder={t('common.address')}
                         className="md:col-span-2"
                     />
+
+                    <div className="md:col-span-4 space-y-2">
+                        <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                            {t('partnerCategories.label')}
+                        </label>
+                        <CustomSelect
+                            multiple
+                            searchable
+                            options={categories.map((c) => ({ value: String(c.id), label: c.name }))}
+                            value={form.categoryIds}
+                            onChange={(vals) => setForm((prev) => ({ ...prev, categoryIds: vals }))}
+                            placeholder={t('partnerCategories.selectPlaceholder')}
+                            ariaLabel={t('partnerCategories.label')}
+                            onQuickCreate={canCreateCategory ? (name) => openQuickCreate('partnerCategory', name, (item) => {
+                                setCategories((prev) => [...prev, item.raw])
+                                setForm((prev) => ({ ...prev, categoryIds: [...prev.categoryIds, item.value] }))
+                            }) : undefined}
+                        />
+                    </div>
 
                     <TextareaField
                         id="manufacturer-notes"
@@ -377,16 +443,19 @@ export default function ManufacturersPage() {
                         className="md:col-span-4"
                     />
 
-                    <label className="md:col-span-4 inline-flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
-                        <input
-                            type="checkbox"
-                            name="active"
-                            checked={form.active}
-                            onChange={handleChange}
-                            className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
-                        />
-                        <span className="font-medium text-slate-700 dark:text-slate-200">{t('common.active')}</span>
-                    </label>
+                    {/* Active is a lifecycle toggle, only meaningful once a record exists — new records are active. */}
+                    {editingId && (
+                        <label className="md:col-span-4 inline-flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
+                            <input
+                                type="checkbox"
+                                name="active"
+                                checked={form.active}
+                                onChange={handleChange}
+                                className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
+                            />
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{t('common.active')}</span>
+                        </label>
+                    )}
 
                     <div className="md:col-span-4 flex justify-end gap-3">
                         <button
@@ -423,6 +492,23 @@ export default function ManufacturersPage() {
                 onClose={bulkDeleteModal.close}
                 onConfirm={handleBulkDelete}
                 loading={loading}
+            />
+
+            <CategoryManagerModal
+                isOpen={categoryModal.isOpen}
+                onClose={categoryModal.close}
+                endpoint="/partner-categories"
+                module="PARTNER_CATEGORIES"
+                i18nKey="partnerCategories"
+                onChanged={loadData}
+            />
+
+            <QuickCreateModal
+                type={quickCreate?.type}
+                initialName={quickCreate?.name ?? ''}
+                isOpen={!!quickCreate}
+                onClose={closeQuickCreate}
+                onCreated={handleQuickCreated}
             />
         </div>
     )

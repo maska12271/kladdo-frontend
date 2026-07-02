@@ -30,18 +30,24 @@ const emptyForm = {
     fullName: '',
     role: 'USER',
     password: '',
+    canSeePrices: true,
 }
+
+// Restricted (permission-governed) roles that also carry the price-visibility toggle.
+const RESTRICTED_ROLES = ['USER', 'WAREHOUSE']
 
 const ROLE_LABELS = {
     OWNER: 'Owner',
     ADMINISTRATOR: 'Administrator',
     USER: 'User',
+    WAREHOUSE: 'Warehouse',
 }
 
 const ROLE_BADGE = {
     OWNER: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
     ADMINISTRATOR: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
     USER: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+    WAREHOUSE: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
 }
 
 const exportColumns = [
@@ -118,6 +124,7 @@ export default function UsersPage() {
             fullName: item.fullName || '',
             role: item.role === 'OWNER' ? 'ADMINISTRATOR' : item.role || 'USER',
             password: '',
+            canSeePrices: item.canSeePrices !== false,
         })
         formModal.open()
     }
@@ -137,11 +144,14 @@ export default function UsersPage() {
         setError('')
         setLoading(true)
         try {
+            // The price-visibility flag only applies to restricted roles; managers always see prices.
+            const canSeePrices = RESTRICTED_ROLES.includes(form.role) ? form.canSeePrices : true
             if (editingId) {
                 await apiPut(`/users/${editingId}`, {
                     fullName: form.fullName,
                     role: form.role,
                     password: form.password ? form.password : null,
+                    canSeePrices,
                 })
             } else {
                 await apiPost('/users', {
@@ -149,6 +159,7 @@ export default function UsersPage() {
                     fullName: form.fullName,
                     role: form.role,
                     password: form.password,
+                    canSeePrices,
                 })
             }
             toast.success(editingId ? t('users.updated') : t('users.created'))
@@ -298,7 +309,7 @@ export default function UsersPage() {
                                 ? []
                                 : [
                                     { key: 'edit', label: t('common.edit'), icon: Pencil, onClick: () => openEdit(row) },
-                                    ...(row.role === 'USER'
+                                    ...(RESTRICTED_ROLES.includes(row.role)
                                         ? [{ key: 'permissions', label: t('users.permissions'), icon: ShieldCheck, onClick: () => openPermissions(row) }]
                                         : []),
                                     {
@@ -348,6 +359,7 @@ export default function UsersPage() {
                             { value: 'OWNER', label: t('roles.OWNER') },
                             { value: 'ADMINISTRATOR', label: t('roles.ADMINISTRATOR') },
                             { value: 'USER', label: t('roles.USER') },
+                            { value: 'WAREHOUSE', label: t('roles.WAREHOUSE') },
                         ],
                     },
                     {
@@ -438,14 +450,31 @@ export default function UsersPage() {
                         placeholder={t('users.form.selectRole')}
                         options={[
                             { value: 'USER', label: t('roles.USER') },
+                            { value: 'WAREHOUSE', label: t('roles.WAREHOUSE') },
                             { value: 'ADMINISTRATOR', label: t('roles.ADMINISTRATOR') },
                         ]}
                     />
 
-                    {!editingId && form.role === 'USER' && (
+                    {!editingId && RESTRICTED_ROLES.includes(form.role) && (
                         <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
-                            {t('users.form.newUserHint')}
+                            {form.role === 'WAREHOUSE' ? t('users.form.newWarehouseHint') : t('users.form.newUserHint')}
                         </p>
+                    )}
+
+                    {RESTRICTED_ROLES.includes(form.role) && (
+                        <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
+                            <span>
+                                <span className="block font-medium text-slate-700 dark:text-slate-200">{t('users.form.canSeePrices')}</span>
+                                <span className="text-xs text-slate-500 dark:text-slate-400">{t('users.form.canSeePricesHint')}</span>
+                            </span>
+                            <input
+                                type="checkbox"
+                                name="canSeePrices"
+                                checked={!!form.canSeePrices}
+                                onChange={(e) => setForm((prev) => ({ ...prev, canSeePrices: e.target.checked }))}
+                                className="h-5 w-5 rounded border-slate-300 text-teal-600 focus:ring-teal-500 dark:border-slate-700"
+                            />
+                        </label>
                     )}
 
                     <FormField

@@ -179,7 +179,7 @@ export default function DataTable({
     const rangeEnd = Math.min(start + pageSize, total)
 
     return (
-        <div className={bare ? '' : 'overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'}>
+        <div className={bare ? '' : 'shadow-card overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'}>
             {showBulkBar && (
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-teal-200 bg-teal-50 px-4 py-3 dark:border-teal-900/60 dark:bg-teal-950/30">
                     <div className="flex items-center gap-3">

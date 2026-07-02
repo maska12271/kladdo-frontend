@@ -29,6 +29,7 @@ export default function SearchFilters({
                         multiple
                         options={filter.options}
                         value={filter.value}
+                        searchable={filter.searchable && filter.options.length > 5}
                         onChange={filter.onChange}
                         placeholder={filter.placeholder || t('common.allStatuses')}
                         ariaLabel={filter.placeholder}

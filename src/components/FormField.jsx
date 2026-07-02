@@ -1,5 +1,15 @@
 import CustomSelect from "./CustomSelect";
 
+/** Field label with a red asterisk appended when the field is required. */
+function FieldLabel({ id, label, required }) {
+    return (
+        <label htmlFor={id} className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            {label}
+            {required && <span className="ml-0.5 text-rose-500" aria-hidden="true">*</span>}
+        </label>
+    );
+}
+
 /**
  * Form select backed by {@link CustomSelect}. Emits an `onChange` shaped like a native event
  * (`{ target: { name, value } }`) so existing form handlers keep working unchanged. Pass
@@ -20,9 +30,7 @@ export function FormSelect({
                            }) {
     return (
         <div className={`space-y-2 ${className}`}>
-            <label htmlFor={id} className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                {label}
-            </label>
+            <FieldLabel id={id} label={label} required={required} />
             <CustomSelect
                 id={id}
                 options={options}
@@ -62,12 +70,7 @@ export function FormField({
                           }) {
     return (
         <div className={`space-y-2 ${className}`}>
-            <label
-                htmlFor={id}
-                className="text-sm font-medium text-slate-700 dark:text-slate-200"
-            >
-                {label}
-            </label>
+            <FieldLabel id={id} label={label} required={required} />
             <input
                 id={id}
                 name={name}
@@ -96,12 +99,7 @@ export function TextareaField({
                               }) {
     return (
         <div className={`space-y-2 ${className}`}>
-            <label
-                htmlFor={id}
-                className="text-sm font-medium text-slate-700 dark:text-slate-200"
-            >
-                {label}
-            </label>
+            <FieldLabel id={id} label={label} required={required} />
             <textarea
                 id={id}
                 name={name}
@@ -128,12 +126,7 @@ export function SelectField({
                             }) {
     return (
         <div className={`space-y-2 ${className}`}>
-            <label
-                htmlFor={id}
-                className="text-sm font-medium text-slate-700 dark:text-slate-200"
-            >
-                {label}
-            </label>
+            <FieldLabel id={id} label={label} required={required} />
             <select
                 id={id}
                 name={name}

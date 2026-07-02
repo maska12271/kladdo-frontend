@@ -58,7 +58,9 @@ export function AuthProvider({ children }) {
     }, [token, persistUser])
 
     const login = useCallback(async (email, password) => {
-        const response = await apiPost('/auth/login', { email, password })
+        // Suppress the global error toast (LoginPage renders the failure inline) and skip the session-
+        // expiry redirect so a 401 for bad credentials surfaces "invalid email or password", not "session expired".
+        const response = await apiPost('/auth/login', { email, password }, { suppressErrorToast: true, skipAuthRedirect: true })
         localStorage.setItem(TOKEN_KEY, response.token)
         localStorage.setItem(USER_KEY, JSON.stringify(response.user))
         setToken(response.token)
@@ -67,6 +69,10 @@ export function AuthProvider({ children }) {
     }, [])
 
     const isAdmin = MANAGER_ROLES.includes(user?.role)
+
+    // Whether the current account may see monetary values. Managers always can; everyone else is
+    // governed by their account flag (default true when unset, e.g. sessions stored before the flag).
+    const canSeePrices = isAdmin || user?.canSeePrices !== false
 
     /**
      * Whether the current user may perform `action` ('canView' | 'canCreate' | 'canEdit' |
@@ -84,11 +90,12 @@ export function AuthProvider({ children }) {
         user,
         isAuthenticated: Boolean(token),
         isAdmin,
+        canSeePrices,
         permissions: user?.permissions || {},
         can,
         login,
         logout,
-    }), [token, user, isAdmin, can, login, logout])
+    }), [token, user, isAdmin, canSeePrices, can, login, logout])
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

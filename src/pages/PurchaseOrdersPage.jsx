@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../api/client'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiUpload } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import SearchFilters from '../components/SearchFilters'
 import DataTable from '../components/DataTable'
@@ -13,12 +13,14 @@ import Modal from '../components/Modal'
 import ConfirmModal from '../components/ConfirmModal'
 import { useModal } from '../hooks/useModal'
 import { useQuickCreate } from '../hooks/useQuickCreate'
-import { usePermissions } from '../context/AuthContext'
+import { useAuth, usePermissions } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
 import QuickCreateModal from '../components/QuickCreateModal'
 import { useToast } from '../context/ToastContext'
 import { formatDate, formatMoney, safeArray } from '../utils/format'
 import {FormField, FormSelect, TextareaField} from "../components/FormField.jsx";
-import { Pencil, Trash2 } from 'lucide-react'
+import AddressAutocompleteField from "../components/AddressAutocompleteField.jsx";
+import { Info, Pencil, Trash2, Upload, FileText, X } from 'lucide-react'
 
 const exportColumns = [
     { header: 'ID', value: (r) => r.id },
@@ -40,6 +42,7 @@ const exportColumns = [
 
 const emptyForm = {
     manufacturerId: '',
+    warehouseId: '',
     orderNumber: '',
     status: 'NEW',
     orderDate: '',
@@ -48,18 +51,30 @@ const emptyForm = {
     deliveryAddress: '',
     notes: '',
     deliveryPrice: 0,
+    invoiceFileUrl: '',
+    invoiceFileName: '',
     items: [
         {
             productId: '',
             quantity: 1,
             unitPrice: 0,
+            lotNumber: '',
+            productionDate: '',
+            expiryDate: '',
         },
     ],
 }
 
+// A fresh, empty order line. Reused by the "Add item" button and the empty-form fallback.
+const emptyItem = () => ({ productId: '', quantity: 1, unitPrice: 0, lotNumber: '', productionDate: '', expiryDate: '' })
+
+const todayStr = () => new Date().toISOString().slice(0, 10)
+
 export default function PurchaseOrdersPage() {
     const { t } = useTranslation()
     const { canCreate, canEdit, canDelete } = usePermissions('PURCHASE_ORDERS')
+    const { canSeePrices } = useAuth()
+    const { defaultWarehouseId } = useSettings()
     const navigate = useNavigate()
     const toast = useToast()
     const { quickCreate, openQuickCreate, closeQuickCreate, handleQuickCreated } = useQuickCreate()
@@ -70,8 +85,10 @@ export default function PurchaseOrdersPage() {
     const [rows, setRows] = useState([])
     const [manufacturers, setManufacturers] = useState([])
     const [products, setProducts] = useState([])
+    const [warehouses, setWarehouses] = useState([])
     const [form, setForm] = useState(emptyForm)
     const [editingId, setEditingId] = useState(null)
+    const [suggestedOrderNumber, setSuggestedOrderNumber] = useState(null)
     const [deletingItem, setDeletingItem] = useState(null)
     const [selectedIds, setSelectedIds] = useState([])
     const [search, setSearch] = useState('')
@@ -79,21 +96,32 @@ export default function PurchaseOrdersPage() {
     const [manufacturerFilter, setManufacturerFilter] = useState([])
     const [loading, setLoading] = useState(false)
     const [statusLoading, setStatusLoading] = useState({})
+    // Form-level validation message shown in the modal when submit is blocked.
+    const [formError, setFormError] = useState('')
+    const [uploadingInvoice, setUploadingInvoice] = useState(false)
+    const invoiceInputRef = useRef(null)
 
     useEffect(() => {
         loadData()
     }, [])
 
+    // Clear the validation banner as soon as the user edits the form again.
+    useEffect(() => {
+        setFormError('')
+    }, [form])
+
     const loadData = async () => {
-        const [ordersRes, manufacturersRes, productsRes] = await Promise.all([
+        const [ordersRes, manufacturersRes, productsRes, warehousesRes] = await Promise.all([
             apiGet('/purchase-orders?page=0&size=500&sortBy=id&sortDir=desc'),
             apiGet('/manufacturers?page=0&size=500&sortBy=id&sortDir=asc'),
             apiGet('/products?page=0&size=500&sortBy=id&sortDir=asc'),
+            apiGet('/warehouses'),
         ])
 
         setRows(safeArray(ordersRes))
         setManufacturers(safeArray(manufacturersRes))
         setProducts(safeArray(productsRes))
+        setWarehouses(safeArray(warehousesRes))
     }
 
     const filteredRows = useMemo(() => {
@@ -112,16 +140,38 @@ export default function PurchaseOrdersPage() {
         })
     }, [rows, search, statusFilter, manufacturerFilter])
 
-    const openCreate = () => {
+    // Pre-select the company default warehouse (when it still exists) or the only warehouse, if one.
+    const pickDefaultWarehouse = () => {
+        if (defaultWarehouseId && warehouses.some((w) => String(w.id) === String(defaultWarehouseId))) {
+            return String(defaultWarehouseId)
+        }
+        return warehouses.length === 1 ? String(warehouses[0].id) : ''
+    }
+
+    const openCreate = async () => {
         setEditingId(null)
-        setForm(emptyForm)
+        setFormError('')
+        // Prefill what we sensibly can: today's date and the default warehouse.
+        setForm({ ...emptyForm, orderDate: todayStr(), warehouseId: pickDefaultWarehouse(), items: [emptyItem()] })
         formModal.open()
+        // Prefill a system-suggested order number the user can override (mirrors sales orders).
+        try {
+            const res = await apiGet('/purchase-orders/next-number')
+            const number = res?.number || ''
+            setSuggestedOrderNumber(number)
+            setForm((prev) => ({ ...prev, orderNumber: number }))
+        } catch {
+            setSuggestedOrderNumber(null)
+        }
     }
 
     const openEdit = (item) => {
         setEditingId(item.id)
+        setFormError('')
+        setSuggestedOrderNumber(null)
         setForm({
             manufacturerId: item.manufacturer?.id || '',
+            warehouseId: item.warehouse?.id || '',
             orderNumber: item.orderNumber || '',
             status: item.status || 'NEW',
             orderDate: item.orderDate || '',
@@ -130,13 +180,18 @@ export default function PurchaseOrdersPage() {
             deliveryAddress: item.deliveryAddress || '',
             notes: item.notes || '',
             deliveryPrice: item.deliveryPrice ?? 0,
+            invoiceFileUrl: item.invoiceFileUrl || '',
+            invoiceFileName: item.invoiceFileName || '',
             items: item.items?.length
                 ? item.items.map((it) => ({
                     productId: it.product?.id || '',
                     quantity: it.quantity ?? 1,
                     unitPrice: it.unitPrice ?? 0,
+                    lotNumber: it.lotNumber || '',
+                    productionDate: it.productionDate || '',
+                    expiryDate: it.expiryDate || '',
                 }))
-                : [{ productId: '', quantity: 1, unitPrice: 0 }],
+                : [emptyItem()],
         })
         formModal.open()
     }
@@ -154,14 +209,56 @@ export default function PurchaseOrdersPage() {
     const handleItemChange = (index, field, value) => {
         setForm((prev) => ({
             ...prev,
-            items: prev.items.map((item, i) => (i === index ? { ...item, [field]: value } : item)),
+            items: prev.items.map((item, i) => {
+                if (i !== index) return item
+                const next = { ...item, [field]: value }
+                // Editing the product or lot number unlocks the dates until the lot is re-checked.
+                if (field === 'lotNumber' || field === 'productId') next.lotExists = false
+                return next
+            }),
         }))
+    }
+
+    // Picking a product prefills its unit price (the catalogue price) as a starting point — same as
+    // sales orders. The user can still adjust it to the actual purchase cost.
+    const handleProductChange = (index, productId) => {
+        const product = products.find((p) => String(p.id) === String(productId))
+        setForm((prev) => ({
+            ...prev,
+            items: prev.items.map((item, i) =>
+                i === index
+                    ? { ...item, productId, unitPrice: product ? product.price : item.unitPrice, lotExists: false }
+                    : item
+            ),
+        }))
+    }
+
+    // On blur of a line's lot field: if that product already has the lot, lock + pre-fill its dates.
+    const checkLotExists = async (index) => {
+        const item = form.items[index]
+        const lot = (item?.lotNumber || '').trim()
+        if (!item?.productId || !lot) return
+        try {
+            const res = await apiGet(`/products/${item.productId}/batches/lookup?lotNumber=${encodeURIComponent(lot)}`)
+            setForm((prev) => ({
+                ...prev,
+                items: prev.items.map((it, i) => {
+                    if (i !== index) return it
+                    if (res?.exists) {
+                        return { ...it, lotExists: true, productionDate: res.productionDate || '', expiryDate: res.expiryDate || '' }
+                    }
+                    return { ...it, lotExists: false }
+                }),
+            }))
+        } catch {
+            /* lookup failure is non-blocking — leave the fields editable */
+        }
     }
 
     const addItem = () => {
         setForm((prev) => ({
             ...prev,
-            items: [...prev.items, { productId: '', quantity: 1, unitPrice: 0 }],
+            items: [...prev.items, emptyItem()],
         }))
     }
 
@@ -172,13 +269,57 @@ export default function PurchaseOrdersPage() {
         }))
     }
 
+    // Upload a supplier invoice document; the returned /uploads url + original name are saved with the order.
+    const uploadInvoiceFile = async (file) => {
+        if (!file) return
+        setUploadingInvoice(true)
+        try {
+            const data = new FormData()
+            data.append('file', file)
+            const res = await apiUpload('/upload/document', data)
+            setForm((prev) => ({ ...prev, invoiceFileUrl: res.url, invoiceFileName: res.name || file.name }))
+            toast.success(t('purchaseOrders.invoice.uploaded'))
+        } finally {
+            setUploadingInvoice(false)
+            if (invoiceInputRef.current) invoiceInputRef.current.value = ''
+        }
+    }
+
+    const removeInvoiceFile = () => setForm((prev) => ({ ...prev, invoiceFileUrl: '', invoiceFileName: '' }))
+
+    // Returns a message when the form can't be submitted yet, or null when it is valid.
+    const validate = () => {
+        if (!form.manufacturerId) return t('purchaseOrders.validation.manufacturerRequired')
+        if (!form.warehouseId) return t('purchaseOrders.validation.warehouseRequired')
+        if (!form.items.length) return t('purchaseOrders.validation.itemRequired')
+        for (let i = 0; i < form.items.length; i++) {
+            const it = form.items[i]
+            if (!it.productId) return t('purchaseOrders.validation.productRequired', { line: i + 1 })
+            if (!(Number(it.quantity) > 0)) return t('purchaseOrders.validation.quantityRequired', { line: i + 1 })
+            if (!it.lotNumber || !it.lotNumber.trim()) return t('purchaseOrders.validation.lotRequired', { line: i + 1 })
+        }
+        return null
+    }
+
     const handleSubmit = async (e) => {
         e.preventDefault()
+
+        const validationError = validate()
+        if (validationError) {
+            setFormError(validationError)
+            return
+        }
+        setFormError('')
         setLoading(true)
+
+        // If the user kept the system suggestion, send a blank number so the backend allocates (and
+        // advances) the counter; a changed value is sent as-is.
+        const keptSuggestion = !editingId && form.orderNumber === suggestedOrderNumber
 
         const payload = {
             manufacturerId: Number(form.manufacturerId),
-            orderNumber: form.orderNumber || null,
+            warehouseId: Number(form.warehouseId),
+            orderNumber: keptSuggestion ? null : form.orderNumber || null,
             status: form.status,
             orderDate: form.orderDate || null,
             closingDate: form.closingDate || null,
@@ -186,10 +327,15 @@ export default function PurchaseOrdersPage() {
             deliveryAddress: form.deliveryAddress,
             notes: form.notes,
             deliveryPrice: Number(form.deliveryPrice || 0),
+            invoiceFileUrl: form.invoiceFileUrl || null,
+            invoiceFileName: form.invoiceFileName || null,
             items: form.items.map((item) => ({
                 productId: Number(item.productId),
                 quantity: Number(item.quantity),
                 unitPrice: Number(item.unitPrice),
+                lotNumber: item.lotNumber?.trim() || null,
+                productionDate: item.productionDate || null,
+                expiryDate: item.expiryDate || null,
             })),
         }
 
@@ -268,7 +414,7 @@ export default function PurchaseOrdersPage() {
             ),
         },
         { key: 'orderDate', label: t('purchaseOrders.cols.orderDate'), render: (row) => formatDate(row.orderDate) },
-        { key: 'totalAmount', label: t('common.total'), render: (row) => formatMoney(row.totalAmount) },
+        ...(canSeePrices ? [{ key: 'totalAmount', label: t('common.total'), render: (row) => formatMoney(row.totalAmount) }] : []),
         ...((canEdit || canDelete) ? [{
             key: 'actions',
             label: '',
@@ -314,6 +460,7 @@ export default function PurchaseOrdersPage() {
                         key: 'manufacturer',
                         value: manufacturerFilter,
                         onChange: setManufacturerFilter,
+                        searchable: true,
                         placeholder: t('common.allManufacturers'),
                         options: manufacturers.map((m) => ({ value: String(m.id), label: m.name })),
                     },
@@ -359,7 +506,12 @@ export default function PurchaseOrdersPage() {
                 title={editingId ? t('purchaseOrders.editTitle') : t('purchaseOrders.addTitle')}
                 onClose={formModal.close}
             >
-                <form onSubmit={handleSubmit} className="space-y-5">
+                <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+                    {formError && (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                            {formError}
+                        </div>
+                    )}
                     <div className="grid gap-4 md:grid-cols-2">
                         <FormSelect
                             id="purchase-order-manufacturer"
@@ -375,6 +527,17 @@ export default function PurchaseOrdersPage() {
                                 setManufacturers((prev) => [...prev, item.raw])
                                 handleChange({ target: { name: 'manufacturerId', value: item.value } })
                             })}
+                        />
+
+                        <FormSelect
+                            id="purchase-order-warehouse"
+                            label={t('purchaseOrders.form.warehouse')}
+                            name="warehouseId"
+                            value={form.warehouseId}
+                            onChange={handleChange}
+                            required
+                            placeholder={t('purchaseOrders.form.selectWarehouse')}
+                            options={warehouses.map((w) => ({ value: String(w.id), label: w.name }))}
                         />
 
                         <FormField
@@ -441,7 +604,7 @@ export default function PurchaseOrdersPage() {
                             placeholder={t('purchaseOrders.form.deliveryPrice')}
                         />
 
-                        <FormField
+                        <AddressAutocompleteField
                             id="purchase-order-delivery-address"
                             label={t('purchaseOrders.form.deliveryAddress')}
                             name="deliveryAddress"
@@ -461,6 +624,50 @@ export default function PurchaseOrdersPage() {
                         rows={3}
                     />
 
+                    {/* Supplier (manufacturer) invoice document attachment. */}
+                    <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">{t('purchaseOrders.invoice.label')}</label>
+                        <input
+                            ref={invoiceInputRef}
+                            type="file"
+                            accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.txt,.csv"
+                            onChange={(e) => uploadInvoiceFile(e.target.files?.[0])}
+                            className="hidden"
+                        />
+                        {form.invoiceFileName ? (
+                            <div className="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 dark:border-slate-800">
+                                <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                                <span className="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">{form.invoiceFileName}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => invoiceInputRef.current?.click()}
+                                    disabled={uploadingInvoice}
+                                    className="text-sm font-medium text-teal-600 hover:underline disabled:opacity-60 dark:text-teal-400"
+                                >
+                                    {uploadingInvoice ? t('common.saving') : t('purchaseOrders.invoice.replace')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={removeInvoiceFile}
+                                    aria-label={t('common.remove')}
+                                    className="text-rose-500 hover:text-rose-600"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => invoiceInputRef.current?.click()}
+                                disabled={uploadingInvoice}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-800"
+                            >
+                                <Upload className="h-4 w-4" /> {uploadingInvoice ? t('common.saving') : t('purchaseOrders.invoice.upload')}
+                            </button>
+                        )}
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{t('purchaseOrders.invoice.hint')}</p>
+                    </div>
+
                     <div className="space-y-3">
                         <div className="flex items-center justify-between">
                             <h3 className="text-lg font-semibold">{t('purchaseOrders.form.orderItems')}</h3>
@@ -476,21 +683,22 @@ export default function PurchaseOrdersPage() {
                         {form.items.map((item, index) => (
                             <div
                                 key={index}
-                                className="grid gap-3 rounded-2xl border border-slate-200 p-4 md:grid-cols-[2fr_1fr_1fr_auto] dark:border-slate-800"
+                                className="space-y-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800"
                             >
+                                <div className="grid gap-3 md:grid-cols-[2fr_1fr_1fr_auto]">
                                 <FormSelect
                                     id={`purchase-order-item-product-${index}`}
                                     label={t('purchaseOrders.form.product')}
                                     name={`productId-${index}`}
                                     value={item.productId}
-                                    onChange={(e) => handleItemChange(index, "productId", e.target.value)}
+                                    onChange={(e) => handleProductChange(index, e.target.value)}
                                     required
                                     searchable
                                     placeholder={t('purchaseOrders.form.selectProduct')}
                                     options={products.map((product) => ({ value: String(product.id), label: product.name }))}
                                     onQuickCreate={(name) => openQuickCreate('product', name, (created) => {
                                         setProducts((prev) => [...prev, created.raw])
-                                        handleItemChange(index, 'productId', created.value)
+                                        handleProductChange(index, created.value)
                                     })}
                                 />
 
@@ -498,6 +706,8 @@ export default function PurchaseOrdersPage() {
                                     id={`purchase-order-item-quantity-${index}`}
                                     label={t('common.quantity')}
                                     type="number"
+                                    min={1}
+                                    required
                                     name={`quantity-${index}`}
                                     value={item.quantity}
                                     onChange={(e) => handleItemChange(index, "quantity", e.target.value)}
@@ -515,18 +725,60 @@ export default function PurchaseOrdersPage() {
                                     placeholder={t('orderDetail.cols.unitPrice')}
                                 />
 
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-slate-700 opacity-0 dark:text-slate-200">
-                                        {t('common.remove')}
-                                    </label>
+                                <div className="flex items-end">
                                     <button
                                         type="button"
                                         onClick={() => removeItem(index)}
                                         disabled={form.items.length === 1}
-                                        className="w-full rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                                        aria-label={t('common.remove')}
+                                        title={t('common.remove')}
+                                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-rose-500 hover:bg-rose-50 disabled:opacity-40 dark:border-slate-700 dark:hover:bg-rose-950/40"
                                     >
-                                        {t('common.remove')}
+                                        <Trash2 className="h-4 w-4" />
                                     </button>
+                                </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        <FormField
+                                            id={`purchase-order-item-lot-${index}`}
+                                            label={t('purchaseOrders.form.lotNumber')}
+                                            name={`lotNumber-${index}`}
+                                            value={item.lotNumber}
+                                            onChange={(e) => handleItemChange(index, 'lotNumber', e.target.value)}
+                                            onBlur={() => checkLotExists(index)}
+                                            required
+                                            placeholder={t('purchaseOrders.form.lotNumberPlaceholder')}
+                                        />
+
+                                        <FormField
+                                            id={`purchase-order-item-production-${index}`}
+                                            label={t('purchaseOrders.form.productionDate')}
+                                            type="date"
+                                            name={`productionDate-${index}`}
+                                            value={item.productionDate}
+                                            onChange={(e) => handleItemChange(index, 'productionDate', e.target.value)}
+                                            disabled={item.lotExists}
+                                            inputClassName={item.lotExists ? 'cursor-not-allowed bg-slate-100 dark:bg-slate-800/60' : ''}
+                                        />
+
+                                        <FormField
+                                            id={`purchase-order-item-expiry-${index}`}
+                                            label={t('purchaseOrders.form.expiryDate')}
+                                            type="date"
+                                            name={`expiryDate-${index}`}
+                                            value={item.expiryDate}
+                                            onChange={(e) => handleItemChange(index, 'expiryDate', e.target.value)}
+                                            disabled={item.lotExists}
+                                            inputClassName={item.lotExists ? 'cursor-not-allowed bg-slate-100 dark:bg-slate-800/60' : ''}
+                                        />
+                                    </div>
+                                    {item.lotExists && (
+                                        <p className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                                            <Info className="h-3.5 w-3.5 shrink-0" /> {t('purchaseOrders.form.lotExists', { lot: (item.lotNumber || '').trim() })}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                         ))}

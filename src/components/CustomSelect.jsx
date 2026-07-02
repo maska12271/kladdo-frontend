@@ -42,7 +42,12 @@ export default function CustomSelect({
     const filtered = useMemo(() => {
         if (!searchable || !query.trim()) return options
         const q = query.toLowerCase()
-        return options.filter((o) => String(o.label).toLowerCase().includes(q))
+        // Match the visible label plus an optional `search` keyword string (e.g. a product's SKU),
+        // so callers can keep the label clean while still searching by hidden fields.
+        return options.filter((o) =>
+            String(o.label).toLowerCase().includes(q) ||
+            (o.search && String(o.search).toLowerCase().includes(q))
+        )
     }, [options, query, searchable])
 
     const updateCoords = () => {
@@ -237,7 +242,7 @@ export default function CustomSelect({
                             </div>
                         )}
 
-                        {onQuickCreate && !multiple && (
+                        {onQuickCreate && (
                             <div className="shrink-0 border-t border-slate-200 dark:border-slate-800">
                                 <button
                                     type="button"

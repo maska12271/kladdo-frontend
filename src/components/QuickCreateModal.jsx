@@ -14,6 +14,12 @@ const CONFIGS = {
         endpoint: '/categories',
         toPayload: (f) => ({ name: f.name, description: f.description || '' }),
     },
+    partnerCategory: {
+        titleKey: 'quickCreate.partnerCategory',
+        createdKey: 'partnerCategories.created',
+        endpoint: '/partner-categories',
+        toPayload: (f) => ({ name: f.name, description: f.description || '', active: true }),
+    },
     manufacturer: {
         titleKey: 'quickCreate.manufacturer',
         createdKey: 'manufacturers.created',
@@ -126,7 +132,7 @@ export default function QuickCreateModal({ type, initialName = '', isOpen, onClo
                         autoFocus
                     />
 
-                    {type === 'category' && (
+                    {(type === 'category' || type === 'partnerCategory') && (
                         <FormField
                             id="qc-description"
                             label={t('common.description')}

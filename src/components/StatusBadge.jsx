@@ -46,6 +46,17 @@ const STATUS_TONE = {
     OUT_OF_STOCK: 'rose',
     ARCHIVED: 'slate',
     WINNER: 'emerald',
+    // Invoice statuses (OVERDUE is a synthetic value the frontend derives for unpaid + past-due rows).
+    UNPAID: 'amber',
+    PAID: 'emerald',
+    VOID: 'slate',
+    OVERDUE: 'rose',
+    // Order payment statuses (derived from an order's invoices).
+    NOT_INVOICED: 'slate',
+    PREPAYMENT_PENDING: 'amber',
+    PREPAYMENT_OVERDUE: 'rose',
+    AWAITING_FINAL: 'violet',
+    INVOICED: 'sky',
 }
 
 // i18n key per status (CANCELED maps to the CANCELLED label).
@@ -65,6 +76,15 @@ const STATUS_LABEL_KEY = {
     OUT_OF_STOCK: 'OUT_OF_STOCK',
     ARCHIVED: 'ARCHIVED',
     WINNER: 'WINNER',
+    UNPAID: 'UNPAID',
+    PAID: 'PAID',
+    VOID: 'VOID',
+    OVERDUE: 'OVERDUE',
+    NOT_INVOICED: 'NOT_INVOICED',
+    PREPAYMENT_PENDING: 'PREPAYMENT_PENDING',
+    PREPAYMENT_OVERDUE: 'PREPAYMENT_OVERDUE',
+    AWAITING_FINAL: 'AWAITING_FINAL',
+    INVOICED: 'INVOICED',
 }
 
 function prettify(value) {

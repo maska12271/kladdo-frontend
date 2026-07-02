@@ -12,9 +12,11 @@ export const DASHBOARD_WIDGETS = [
     { key: 'revenueChart', label: 'Revenue vs spend', x: 0, y: 4, w: 16, h: 8, minW: 8, minH: 5 },
     { key: 'activity', label: 'Recent activity', x: 16, y: 4, w: 8, h: 11, minW: 6, minH: 6 },
     { key: 'lowStock', label: 'Low stock products', x: 0, y: 11, w: 16, h: 8, minW: 8, minH: 5 },
+    { key: 'receivables', label: 'Outstanding invoices', x: 0, y: 19, w: 16, h: 8, minW: 8, minH: 5 },
+    { key: 'expiringLots', label: 'Expiring lots', x: 0, y: 27, w: 16, h: 8, minW: 8, minH: 5 },
     { key: 'tenders', label: 'Latest tenders', x: 16, y: 15, w: 8, h: 6, minW: 6, minH: 4 },
-    { key: 'topClients', label: 'Top clients', x: 0, y: 19, w: 8, h: 6, minW: 6, minH: 4 },
-    { key: 'topProducts', label: 'Top products', x: 8, y: 19, w: 8, h: 6, minW: 6, minH: 4 },
+    { key: 'topClients', label: 'Top clients', x: 0, y: 27, w: 8, h: 6, minW: 6, minH: 4 },
+    { key: 'topProducts', label: 'Top products', x: 8, y: 27, w: 8, h: 6, minW: 6, minH: 4 },
 ]
 
 const STORAGE_PREFIX = 'dashboard-grid-v5'
